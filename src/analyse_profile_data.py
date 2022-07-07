@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from scipy import ndimage, misc
 
 
-pulse = 99811
+pulse = 99813
 #dda = 'HRTS'
 #uid='jetppf'
 #seq = 0
@@ -154,11 +154,13 @@ def check_when_heating_active(pulse, plot=False,verbose=0):
     return times
 
 
-def check_when_data_meaningful(pulse,dda='HRTS',dty ='NE',uid='jetppf',seq=0,eps=1.,plot=False,verbose=0,har=None,output=None):
+def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=None,output=None):
     '''
     input: [times,x,exp_data], where len(exp_data)=len(x)*len(times)
     return: time vector with times when data is gratear than eps
     '''
+    (dda, dty, uid, seq, unit)= data_in
+    
     data = get_data(pulse, dda, uid,seq, output=dty)
     [times,x,exp_data] = data
     
@@ -190,7 +192,7 @@ def check_when_data_meaningful(pulse,dda='HRTS',dty ='NE',uid='jetppf',seq=0,eps
         size = filter_size['default']
     size = np.min([size,lt,lx])
     result = ndimage.median_filter(dataT, size=size)
-
+    
     sumax= np.sum(result, axis=0)
 
     condition = sumax>eps
@@ -198,19 +200,21 @@ def check_when_data_meaningful(pulse,dda='HRTS',dty ='NE',uid='jetppf',seq=0,eps
     first_time = np.min(times[condition])
 
     last_time = np.max(times[condition])
-    print(f'{dda} range after filtering: ({first_time:2.3f},{last_time:2.3f})s.') 
+    print(f'{dda} range after filtering: ({first_time:2.3f},{last_time:2.3f})s.')
+    print(r'Maximum value {:3.4g}{} at {:2.3f}s.'.format(np.max(result[7]),unit,times[np.argmax(result[7])] ))
     #print('Earliest filtered {0:s} time slice: {1:2.3f}s and last time slice {2:2.3f}s '.format(dda, first_time, last_time))
     ind1 = get_ind(first_time, times)
     ind2 = get_ind(last_time, times)
     no_of_time_slices=ind2-ind1
     print('Number of time slices in the filtered range: {}'.format(no_of_time_slices))
-
     
+    # har: heating active range
     if har:
         ind1 = get_ind(har[0], times)
         ind2 = get_ind(har[1], times)
         no_of_time_slices=ind2-ind1
-        print(f'Number of {dda} time slices in the filtered range and with active heating: {no_of_time_slices}\n')
+        print(f'Number of {dda} filtered time slices and with active heating: {no_of_time_slices}')
+        print(f'in the time range ({times[ind1]:2.3f},{times[ind2]:2.3f})s\n')
     print('\n')
     
     if plot:
@@ -245,8 +249,9 @@ def check_when_data_meaningful(pulse,dda='HRTS',dty ='NE',uid='jetppf',seq=0,eps
 def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
     '''
     '''
-    data=[['HRTS','NE','jetppf',0],['CXG6','TI','jetppf',0],['CXD6','TI','jetppf',0],
-          ['CX7C','TI','jetppf',0],['CX7D','TI','jetppf',0]]
+    data=[['HRTS','NE','jetppf',0,'m^-3'],['HRTS','TE','jetppf',0,'eV'],
+          ['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
+          ['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']]
     
     no_times=np.array([])
     times_minmax = np.array([])
@@ -277,7 +282,7 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
         heat_active_range = [np.min(heat_active), np.max(heat_active)]    
         
     for dat in data:
-        time=check_when_data_meaningful(pulse,dda=dat[0],dty =dat[1],uid=dat[2],seq=dat[3],plot=plot,verbose=verbose,har = heat_active_range,output='time')
+        time=check_when_data_meaningful(pulse,dat,plot=plot,verbose=verbose,har = heat_active_range,output='time')
         if dat[0] in ['CXD6','CXG6']:
             no_times= np.append(no_times, len(time))
             times_minmax= np.append(times_minmax, [time[0],time[-1]])
