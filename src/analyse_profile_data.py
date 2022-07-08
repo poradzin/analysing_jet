@@ -3,18 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import ndimage, misc
 
+import plotWindow as pw
 
-pulse = 99813
-#dda = 'HRTS'
-#uid='jetppf'
-#seq = 0
-
-
-plot=False
-
-verbose=0
-
-print(f'PULSE {pulse}\n')
 ###### Reading EFIT++ equilibrium data
 def get_data(pulse, dda, uid, seq, output=None):
     '''
@@ -114,20 +104,47 @@ def get_no_slices(data,tstart,tend):
 
 
 
-def check_when_heating_active(pulse, plot=False,verbose=0):
+def plot_KK3_profile(data,ind,time):
+
+    x_axis=[]
+    y_axis=[]
+    points = np.array([])
+    times = []
+    for ii in ind:
+        #print(ii)
+        index = get_ind(time,data['RC'+ii][2])
+        #print('First index: ',index)
+        x_axis.append(data['RC'+ii][0][index])
+        index = get_ind(time,data['TE'+ii][2])
+        #print('Second index: ',index)
+        y_axis.append(data['TE'+ii][0][index])
+        times.append(data['TE'+ii][2][index])
+        np.append(points,[x_axis[-1],y_axis[-1]],axis=0)
+    print(x_axis)
+    #print(y_axis)
+    #print(times)
+    #plt.scatter(np.arange(len(x_axis))+1,x_axis)
+    plt.scatter(x_axis,y_axis)
+    plt.title("Time slice %6.4f s" % times[0])
+    plt.show()
+
+
+def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
     '''
     '''
 
-    data=[['NBI','PTOT','blue'],['ICRH','PTOT','red']]
+    data=[ ['NBI','PTOT','blue',False],['ICRH','PTOT','red',False] ]
     times={}
-    for  ind, data in enumerate(data):
-        [dda,dty,col]= data
+    values={}
+    for  ind, dat in enumerate(data):
+        [dda,dty,col,active]= dat
         value, x_axis, time, nd, nx, nt, dunits, xunits, tunits, desc, comm, seq, ier = ppf.ppfdata(pulse, dda, dty, uid='jetppf', seq=0)
 
         if len(value)>0:
-            
+            data[ind][3]=True
             nonzerotimes = time[value>0]
-            times[dda]=( nonzerotimes[0], nonzerotimes[-1] )
+            times[dda] = nonzerotimes
+            values[dda]=value[value>0]
             if verbose:
                 print(f'Times {dda} active: {nonzerotimes[0]:2.4f}s to {nonzerotimes[-1]:2.4f}s.')
                 if dda=='NBI':
@@ -143,22 +160,29 @@ def check_when_heating_active(pulse, plot=False,verbose=0):
                             species[octant] = ppfdata[9].split()[-1]
                             print(f'Octant {octant[-1]}, species: {species[octant]}')
                 print('\n')
-            if plot:
-                plt.plot(nonzerotimes, value[value>0], color = col)
-                
+
         else:
             if verbose: print('No {0} found in pulse {1}\n'.format(dda,pulse))
     if plot:
-        plt.show()
+        fig = plt.figure()
+        fig.suptitle(f'Heating', fontsize=13)
+        ax1 = fig.add_subplot(111)
+        for dat in data:
+            if dat[3]:
+                ax1.plot(times[dat[0]], values[dat[0]], color = dat[2])
+        window.addPlot('heating',fig)
+    #if plot:
+    #    plt.show()
     
-    return times
+    return (times,window)
 
 
-def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=None,output=None):
+def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=None,output=None,windows=None):
     '''
     input: [times,x,exp_data], where len(exp_data)=len(x)*len(times)
     return: time vector with times when data is gratear than eps
     '''
+    #print('Namespace: ', __name__)
     (dda, dty, uid, seq, unit)= data_in
     
     data = get_data(pulse, dda, uid,seq, output=dty)
@@ -218,7 +242,7 @@ def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=No
     print('\n')
     
     if plot:
-         
+                 
         fig = plt.figure()
         fig.suptitle(f'{dda}/{dty}/{uid}/{seq}', fontsize=13)
         ax1 = fig.add_subplot(221)  # left side
@@ -235,20 +259,25 @@ def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=No
 
         ax1.set_title('Raw data')
         ax2.set_title(f'filtered: size={size}')
-        
-        plt.show()
+
+        print('############################################')
+        #check of object present
+        #if windows:
+        windows.addPlot(dda,fig)
+        #plt.show()
     #out = {'time':data[0],'x':data[1],'values':dataT, 'data': np.array([time,x,dataT])}
     out = {'time':data[0],'x':data[1],'values':dataT}   
     
     if output in out:
-        return out[output]
+        return (out[output],windows)
     else:
-        return None
+        return (None,windows)
     
 
 def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
     '''
     '''
+    #print('Namespace: ', __name__)
     data=[['HRTS','NE','jetppf',0,'m^-3'],['HRTS','TE','jetppf',0,'eV'],
           ['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
           ['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']]
@@ -257,6 +286,12 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
     times_minmax = np.array([])
     CX_active = np.array([])
     heat_active_range = []
+
+    if plot:
+        print('We\'re plotting')
+        win=pw.plotWindow()
+    else:
+        win=None
     
     if checkHCD:
         nbi = False
@@ -264,75 +299,107 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
         
         # check nbi and icrh times
         heat_active = np.array([])
-        heat_times = check_when_heating_active(pulse,plot=plot, verbose=1)
+        (heat_times,win) = check_when_heating_active(pulse,plot=plot, verbose=1,window=win)
 
         if 'NBI' in heat_times:
             nbi=True
-            (nbi_t_min,nbi_t_max) = heat_times['NBI']
+            (nbi_t_min,nbi_t_max) = (heat_times['NBI'][0],heat_times['NBI'][-1])
             heat_active = np.append(heat_active, [nbi_t_min,nbi_t_max])
             
         if 'ICRH' in heat_times:
             icrh=True
-            (ic_t_min,ic_t_max) = heat_times['ICRH']
+            (ic_t_min,ic_t_max) = (heat_times['ICRH'][0],heat_times['ICRH'][-1])
             heat_active = np.append(heat_active, [ic_t_min,ic_t_max])
             
             
         
 
-        heat_active_range = [np.min(heat_active), np.max(heat_active)]    
+        heat_active_range = [np.min(heat_active), np.max(heat_active)]
+        
         
     for dat in data:
-        time=check_when_data_meaningful(pulse,dat,plot=plot,verbose=verbose,har = heat_active_range,output='time')
+        (time,win)=check_when_data_meaningful(pulse,dat,plot=plot,verbose=verbose,har = heat_active_range,output='time',windows=win)
         if dat[0] in ['CXD6','CXG6']:
             no_times= np.append(no_times, len(time))
             times_minmax= np.append(times_minmax, [time[0],time[-1]])
-
+    if plot:
+        print('Showing')
+        win.show()
     print(f'CXD6 or CXG7 available from {np.min(times_minmax):2.3f}s to {np.max(times_minmax):2.3f}s. for {int(np.max(no_times))} slices.')  
 
-    return None
+    #return None
 
 
+print('Namespace: ', __name__)
+if __name__=='__main__':
+    #import ppf
+    #import numpy as np
+    #import matplotlib.pyplot as plt
+    #from scipy import ndimage, misc
 
-check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
-
+    #import plotWindow as pw
     
-#shot=99811
+    pulse = 99813
 
-sequence=0
+    plot=True
 
-owner='JETPPF'
+    verbose=0
 
-dda='KK3'
-
-#data,ind,gen = get_data(pulse, dda, uid,seq, output='TE')
-
-def plot_KK3_profile(data,ind,time):
-
-    x_axis=[]
-    y_axis=[]
-    points = np.array([])
-    times = []
-    for ii in ind:
-        #print(ii)
-        index = get_ind(time,data['RC'+ii][2])
-        #print('First index: ',index)
-        x_axis.append(data['RC'+ii][0][index])
-        index = get_ind(time,data['TE'+ii][2])
-        #print('Second index: ',index)
-        y_axis.append(data['TE'+ii][0][index])
-        times.append(data['TE'+ii][2][index])
-        np.append(points,[x_axis[-1],y_axis[-1]],axis=0)
-    print(x_axis)
-    #print(y_axis)
-    #print(times)
-    #plt.scatter(np.arange(len(x_axis))+1,x_axis)
-    plt.scatter(x_axis,y_axis)
-    plt.title("Time slice %6.4f s" % times[0])
-    plt.show()
+    print(f'PULSE {pulse}\n')
+        
+    check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
 
 
-#plot_KK3_profile(data,ind,49.9)
+# tests of class plotWindow
+    def fun(f,x):
+        return f(x)
 
-#plt.plot(ppfdata[2],ppfdata[0])
-#plt.show()
- 
+    def add_p(x,y,name,windows):
+            f = plt.figure()
+            #plt.plot(x, y, '--')
+            size=10
+            ax1 = f.add_subplot(221)
+            ax2 = f.add_subplot(222)
+            ax3 = f.add_subplot(223)
+            ax4 = f.add_subplot(224)
+            ax1.plot(x, y, '--')
+            ax2.plot(x,y/2.,'-')
+            ax3.plot(x,np.sqrt(np.abs(y)),'-')
+            ax4.plot(x,y**2.,'-')
+            ax1.set_title('Raw data')
+            ax2.set_title(f'filtered: size={size}')        
+            
+            windows.addPlot(str(name), f)
+
+            return None
+    def plot_funs(functions):
+        win = pw.plotWindow()
+        for function in functions:
+
+            x = np.arange(0, 10, 0.001)
+            y = fun(function,x)
+            add_p(x,y,function.__name__,win)
+        win.show()
+        return None
+
+        
+    #funs = [np.sin,np.cos,np.exp]
+    #plot_funs(funs)
+
+
+    #shot=99811
+
+    sequence=0
+
+    owner='JETPPF'
+
+    dda='KK3'
+
+    #data,ind,gen = get_data(pulse, dda, uid,seq, output='TE')
+
+
+    #plot_KK3_profile(data,ind,49.9)
+
+    #plt.plot(ppfdata[2],ppfdata[0])
+    #plt.show()
+     
