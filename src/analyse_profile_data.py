@@ -9,6 +9,14 @@ import plotWindow as pw
 def get_data(pulse, dda, uid, seq, output=None):
     '''
     '''
+    # Initialise PPF routines
+    ier = ppf.ppfgo(pulse, seq)
+    if ier != 0:
+        raise exception('Error initialising PPF routines. Aborting.')
+
+    # Set User ID for reading
+    ier = ppf.ppfuid(uid, rw="R")
+    
     if output=='TE' and dda=='KK3':
         KK3ind = np.arange(96)
         KK3={}
@@ -27,12 +35,20 @@ def get_data(pulse, dda, uid, seq, output=None):
         tmpG=ppf.ppfdata(pulse,dda,'GEN', seq=seq, uid=uid)
         return (KK3,ind,tmpG)
     if output:
+        dtyp = output
+        ihdat, iwdat, data, x, t, ier = ppf.ppfget(pulse, dda, dtyp)
+        if ier != 0:
+            print('Error reading signal ' + str(dda) + '/' + str(dtyp) + '. PPF Error Code ' + str(ier))
+            print()
         print(f'Fetching {dda}/{output}/{uid}/{seq}')
+            
         value, x_axis, time, nd, nx, nt, dunits, xunits, tunits, desc, comm, seq, ier = ppf.ppfdata(pulse, dda, output, uid=uid, seq=seq)
     else:
         return None
     
     return [time,x_axis, value]
+
+
 
 #q, efit_x, efit_t, nd, nx, nt, dunits, xunits, tunits, desc, comm, seq, ier = ppf.ppfdata(pulse, eqdda, 'Q', uid=equid, seq=eqseq)
 #efit_Rmag, dump1, dump2, nd, nx, nt, dunits, xunits, tunits, desc, comm, seq, ier = ppf.ppfdata(pulse, eqdda, 'RMAG', uid=equid, seq=eqseq)
@@ -142,9 +158,11 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
 
         if len(value)>0:
             data[ind][3]=True
-            nonzerotimes = time[value>0]
+            power_cut_off = 0.0
+            above_cut_off = value>power_cut_off
+            nonzerotimes = time[above_cut_off]
             times[dda] = nonzerotimes
-            values[dda]=value[value>0]
+            values[dda]=value[above_cut_off]
             if verbose:
                 print(f'Times {dda} active: {nonzerotimes[0]:2.4f}s to {nonzerotimes[-1]:2.4f}s.')
                 if dda=='NBI':
@@ -225,7 +243,7 @@ def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=No
 
     last_time = np.max(times[condition])
     print(f'{dda} range after filtering: ({first_time:2.3f},{last_time:2.3f})s.')
-    print(r'Maximum value {:3.4g}{} at {:2.3f}s.'.format(np.max(result[7]),unit,times[np.argmax(result[7])] ))
+    print(r'Maximum value {:3.4g}{} at {:2.3f}s.'.format(np.max(result[0]),unit,times[np.argmax(result[0])] ))
     #print('Earliest filtered {0:s} time slice: {1:2.3f}s and last time slice {2:2.3f}s '.format(dda, first_time, last_time))
     ind1 = get_ind(first_time, times)
     ind2 = get_ind(last_time, times)
@@ -254,8 +272,8 @@ def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=No
         xax=range(len(times))
         ax1.contourf(times,x,dataT)
         ax2.contourf(xax,x,result)
-        ax3.plot(times,dataT[7])
-        ax4.plot(times,result[7], color='r')        
+        ax3.plot(times,dataT[0])
+        ax4.plot(times,result[0], color='r')        
 
         ax1.set_title('Raw data')
         ax2.set_title(f'filtered: size={size}')
@@ -339,7 +357,7 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 99813
+    pulse = 99802
 
     plot=True
 
