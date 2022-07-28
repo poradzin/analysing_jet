@@ -1,8 +1,7 @@
 import ppf
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import ndimage, misc
-
+from scipy import ndimage, misc, fftpack
 import plotWindow as pw
 
 ###### Reading EFIT++ equilibrium data
@@ -152,6 +151,7 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
     data=[ ['NBI','PTOT','blue',False],['ICRH','PTOT','red',False] ]
     times={}
     values={}
+    dft={}
     for  ind, dat in enumerate(data):
         [dda,dty,col,active]= dat
         value, x_axis, time, nd, nx, nt, dunits, xunits, tunits, desc, comm, seq, ier = ppf.ppfdata(pulse, dda, dty, uid='jetppf', seq=0)
@@ -163,6 +163,16 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
             nonzerotimes = time[above_cut_off]
             times[dda] = nonzerotimes
             values[dda]=value[above_cut_off]
+            if dda=='ICRH':
+                dft[dda]={}
+                dft[dda]['fft'] = fftpack.fft(values[dda])
+                L=len(values[dda])
+                dft[dda]['P2']=abs(dft[dda]['fft']/L)
+                dft[dda]['P1']=abs(dft[dda]['P2'][:L//2])
+                print(f'L={L}')
+
+                
+                
             if verbose:
                 print(f'Times {dda} active: {nonzerotimes[0]:2.4f}s to {nonzerotimes[-1]:2.4f}s.')
                 if dda=='NBI':
@@ -181,6 +191,7 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
 
         else:
             if verbose: print('No {0} found in pulse {1}\n'.format(dda,pulse))
+
     if plot:
         fig = plt.figure()
         fig.suptitle(f'Heating', fontsize=13)
@@ -189,6 +200,18 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
             if dat[3]:
                 ax1.plot(times[dat[0]], values[dat[0]], color = dat[2])
         window.addPlot('heating',fig)
+        
+    if plot and data[1][3]:
+        fig = plt.figure()
+        fig.suptitle(f'Heating', fontsize=13)
+        ax1 = fig.add_subplot(111)
+        ax1.plot(range(len(dft[data[1][0]]['P1'])),dft[data[1][0]]['P1'], color = 'black')
+        #ax.set_xlim(left=0, right=50)
+        window.addPlot('ICRH FFT',fig)
+        
+
+
+    
     #if plot:
     #    plt.show()
     
