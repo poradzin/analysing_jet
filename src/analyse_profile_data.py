@@ -201,15 +201,6 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
                 ax1.plot(times[dat[0]], values[dat[0]], color = dat[2])
         window.addPlot('heating',fig)
         
-    if plot and data[1][3]:
-        fig = plt.figure()
-        fig.suptitle(f'Heating', fontsize=13)
-        ax1 = fig.add_subplot(111)
-        ax1.plot(range(len(dft[data[1][0]]['P1'])),dft[data[1][0]]['P1'], color = 'black')
-        #ax.set_xlim(left=0, right=50)
-        window.addPlot('ICRH FFT',fig)
-        
-
 
     
     #if plot:
