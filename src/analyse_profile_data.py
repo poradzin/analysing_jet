@@ -169,6 +169,8 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
                 L=len(values[dda])
                 dft[dda]['P2']=abs(dft[dda]['fft']/L)
                 dft[dda]['P1']=abs(dft[dda]['P2'][:L//2])
+                dft[dda]['Re']=np.real(dft[dda]['fft']/L)[1:]
+                dft[dda]['Im']=np.imag(dft[dda]['fft']/L)[1:]
                 print(f'L={L}')
 
                 
@@ -202,10 +204,14 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
         window.addPlot('heating',fig)
         
     if plot and data[1][3]:
+        signal = [['Re','green'],['Im','red'],['P2','black']]
         fig = plt.figure()
-        fig.suptitle(f'Heating', fontsize=13)
+        
+        fig.suptitle(f'{data[1][0]} FFT', fontsize=13)
         ax1 = fig.add_subplot(111)
-        ax1.plot(range(len(dft[data[1][0]]['P1'])),dft[data[1][0]]['P1'], color = 'black')
+        for sig in signal:        
+            ax1.plot(range(len(dft[data[1][0]][sig[0]])),dft[data[1][0]][sig[0]], color = sig[1],label=sig[0])
+        ax1.legend()
         #ax.set_xlim(left=0, right=50)
         window.addPlot('ICRH FFT',fig)
         
