@@ -82,8 +82,8 @@ def f(t):
     '''
     Sample function
     '''
-    #return 5.+2*np.cos(2*np.pi*t-np.pi/2) +3*np.cos(4*np.pi*t)
-    return 5.+1*np.cos(3*np.pi*t-np.pi/2) +3*np.cos(4*np.pi*t) + 2*np.sin(0.5*np.pi*t)
+    return 5.+2*np.cos(2*np.pi*t-np.pi/2) +3*np.cos(4*np.pi*t)
+    #return 5.+1*np.cos(3*np.pi*t-np.pi/2) +3*np.cos(4*np.pi*t) + 2*np.sin(0.5*np.pi*t)
 
 def ft(t,dft,T,t0=0,nmax=-1):
     '''   
@@ -94,41 +94,42 @@ def ft(t,dft,T,t0=0,nmax=-1):
     dft : 1D numpy complex array, Discrete Fourier transform 
 
     Returns
-    interpolation mode derived from Fourrier transform
+    interpolation mode derived from Fourier transform
     -------
     None.
 
     '''
     
     N=len(dft)
-    #sum_terms = np.ones(N//2+1)
+    sum_terms = np.ones(N//2+1)
+    sum_terms[0]=0.5
     result = np.zeros(N//2+1,dtype=float)
-    result[0]= abs(dft[0])/N
-    for n in np.arange(1,N//2+1):
+    #result[0]= abs(dft[0])/N
+    for n in np.arange(0,N//2+1):
         # basis frequency
         omg = 2*np.pi/T
         phi = np.angle(dft[n])
         result[n]=2./N* abs(dft[n])*np.cos(omg*n*(t-t0) + phi)
     if N-1 & 1:
-        result[-1]=result[-1]/2.
+        #result[-1]=result[-1]/2.
+        sum_terms[-1]=0.5
     if nmax in range(N//2+1):
-        for i in range(N//2+1):
-            if i>nmax:
-                result[i]=0.0
+        np.put(result, range(nmax+1, N//2+1), 0.0)
 
-    return np.sum(result)
-    #return np.dot(sum_terms,result)
+    #return np.sum(result)
+    return np.dot(sum_terms,result)
  
 
 
 # period 
-T=1.5
+T=1.0
 t0=0. # beginning of sampling period
-sample_times=np.arange(0.,T,0.05)
+sample_times=np.arange(0.,T,0.20)
 
 #sampling
 f_n = f(sample_times)
 
+nmax = 3
 N = len(sample_times)
 #fourier transform and inverse
 df_n = dft(f_n)
@@ -141,7 +142,8 @@ isdf_n = fftpack.ifft(sdf_n)
 
 plot_t = T    
 x_list = np.linspace(0.,plot_t, 200)  
-y_list = [ft(x, df_n,T) for x in x_list]   
+y_list = [ft(x, df_n,T) for x in x_list]
+#y_list = ft(x_list, df_n,T) 
 y_check = f(x_list)
     
 if True:

@@ -386,7 +386,7 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 99802
+    pulse = 99811
 
     plot=True
 
