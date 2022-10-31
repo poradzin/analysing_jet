@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import ndimage, misc, fftpack
 import plotWindow as pw
+import sys
 
 ###### Reading EFIT++ equilibrium data
 def get_data(pulse, dda, uid, seq, output=None):
@@ -169,6 +170,8 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
                 L=len(values[dda])
                 dft[dda]['P2']=abs(dft[dda]['fft']/L)
                 dft[dda]['P1']=abs(dft[dda]['P2'][:L//2])
+                dft[dda]['Re']=np.real(dft[dda]['fft']/L)[1:]
+                dft[dda]['Im']=np.imag(dft[dda]['fft']/L)[1:]
                 print(f'L={L}')
 
                 
@@ -229,7 +232,9 @@ def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=No
     
     data = get_data(pulse, dda, uid,seq, output=dty)
     [times,x,exp_data] = data
-    
+    if dda is 'KK3':
+        print(f'x = {x}')
+        sys.exit()
     
     lt=len(data[0])
     lx=len(data[1])
@@ -237,7 +242,7 @@ def check_when_data_meaningful(pulse,data_in, eps=1.,plot=False,verbose=0,har=No
     print('{0:s} range: [{1:2.3f},{2:2.3f}]s.\nLength/no. of slices: {3}'.format(dda,data[0][0],data[0][-1],lt))
     statistics(times,dda=dda,units='s',out=False, plot=plot,verbose=verbose)
     
-    #times may of the length x*ne
+    #times may be of the length x*ne
     if ldata==lx*lt:
         if verbose:
             print(f'Converging data list of length {ldata} into 2D array ({lx},{lt})')
@@ -320,8 +325,8 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
     '''
     '''
     #print('Namespace: ', __name__)
-    data=[['HRTS','NE','jetppf',0,'m^-3'],['HRTS','TE','jetppf',0,'eV'],
-          ['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
+    data=[['HRTS','NE','jetppf',0,'m^-3'],['HRTS','TE','jetppf',0,'eV'],#['KK3','TE02','jetppf',0,'eV'],
+          #['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
           ['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']]
     
     no_times=np.array([])
@@ -370,9 +375,20 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
     print(f'CXD6 or CXG7 available from {np.min(times_minmax):2.3f}s to {np.max(times_minmax):2.3f}s. for {int(np.max(no_times))} slices.')  
 
     #return None
+def get_no_slices_and_plot(pulse,dda,dty,uid,seq,t_start,t_end,plot=True):
+    [t,x,dat] = get_data(pulse,dda,uid,seq,output=dty)
+    data2D = np.reshape(dat, (len(t), len(x)))
+    n0=data2D[:,0][ np.logical_and(t>=t_start, t<=t_end) ]
+    t0=t[np.logical_and(t>=ne_tstart, t<=ne_tend)]
+    if plot:
+        print(f'{dda}/{dty} in {t0[0]:2.3f}s,{t0[-1]:2.3f}s, {len(t0)} slices')
+        plt.plot(t0,n0)
+        plt.title(f'{dda}/{dty} in {t0[0]:2.3f}s,{t0[-1]:2.3f}s, {len(t0)} slices')
+        plt.show()
+    else:
+        print(f'{dda}/{dty} in {t0[0]:2.3f}s,{t0[-1]:2.3f}s, {len(t0)} slices')
+    return (t0,x,n0)
 
-
-print('Namespace: ', __name__)
 if __name__=='__main__':
     #import ppf
     #import numpy as np
@@ -381,7 +397,7 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 99802
+    pulse = 100854
 
     plot=True
 
@@ -389,9 +405,14 @@ if __name__=='__main__':
 
     print(f'PULSE {pulse}\n')
         
-    check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
+    #check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
+    
+    ne_tstart= 47.008
+    ne_tend = 54.5230
 
-
+    (t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'KK3','TE01','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CXD6','TIFS','JETPPF',0,ne_tstart,ne_tend,plot=True)
 # tests of class plotWindow
     def fun(f,x):
         return f(x)
