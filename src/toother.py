@@ -31,6 +31,7 @@ Rs=[]
 Rt=[]
 maxT=0
 maxTime=0
+data = []
 for i in traceNums:
     [_,_,trace_data,_,trace_time,ierr]=get("TE"+str(i).zfill(2))
     [_,_,R_data,_,R_time,ierr]=get("RC"+str(i).zfill(2))
@@ -41,6 +42,14 @@ for i in traceNums:
     times.append(trace_time)
     Rs.append(R_data)
     Rt.append(R_time)
+    if len(R_data)==0:
+        data.append([i,0])
+    else:
+        data.append([i,np.amax(R_data)])
+data = np.array(data)
+data = data[data[:,1].argsort()]
+ind=data[:,0].astype(int)-1
+
 fig, ax = plt.subplots()
 plt.subplots_adjust(left=0.25, bottom=0.25)
 ax.plot(times[initial],traces[initial])
@@ -48,22 +57,24 @@ ax.set_ylim([0,maxT])
 ax.set_xlim([initial,maxTime])
 ax.set_ylabel('Te (eV)')
 ax.set_xlabel('t (s)')
+ax.set_title(f'Channel: {initial}')
 ax2=ax.twinx()
 ax2.plot(Rt[initial],Rs[initial],'r.')
 ax2.set_xlim([initial,maxTime])
-ax2.set_ylim([2,4])
+ax2.set_ylim([2.0,4.0])
 ax2.set_ylabel('$R_{mid}$ (m)',color='r')
 sliderAxis=plt.axes([0.25, 0.1, 0.65, 0.03])
 slider=wid.Slider(sliderAxis,'Channel',1,len(traces),valinit=initial,valfmt='%0.0f')
 
 def update(val):
-    channel=int(slider.val-1)
+    channel=ind[int(slider.val-1)]
     ylim=ax.get_ylim()
     xlim=ax.get_xlim()
     ax.clear()
     ax.plot(times[channel],traces[channel])
     ax.set_ylim(ylim)
     ax.set_xlim(xlim)
+    ax.set_title(f'Channel {channel}')
     ax2.clear()
     ax2.plot(Rt[channel],Rs[channel],'r.')
     ax2.set_xlim(xlim)
