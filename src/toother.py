@@ -23,7 +23,7 @@ get=lambda dtyp:ppf.ppfget(pulse,dda,dtyp)
 initial=59
 initial_time = 40.
 
-traceNums=np.arange(95)+1
+traceNums=np.arange(96)+1
 #get all the traces
 traces=[]
 times=[]
@@ -68,14 +68,14 @@ sliderAxis=plt.axes([0.25, 0.1, 0.65, 0.03])
 slider=wid.Slider(sliderAxis,'Index',1,len(traces),valinit=initial,valfmt='%0.0f')
 
 def update(val):
-    channel=ind[int(slider.val-1)]
+    channel=ind[int(slider.val)]
     ylim=ax.get_ylim()
     xlim=ax.get_xlim()
     ax.clear()
     ax.plot(times[channel],traces[channel])
     ax.set_ylim(ylim)
     ax.set_xlim(xlim)
-    ax.set_title(f'Channel {channel}')
+    ax.set_title(f'Channel {channel+1}')
     ax2.clear()
     ax2.plot(Rt[channel],Rs[channel],'r.')
     ax2.set_xlim(xlim)
