@@ -64,7 +64,7 @@ ax2.set_xlim([initial,maxTime])
 ax2.set_ylim([2.0,4.0])
 ax2.set_ylabel('$R_{mid}$ (m)',color='r')
 sliderAxis=plt.axes([0.25, 0.1, 0.65, 0.03])
-slider=wid.Slider(sliderAxis,'Channel',1,len(traces),valinit=initial,valfmt='%0.0f')
+slider=wid.Slider(sliderAxis,'Index',1,len(traces),valinit=initial,valfmt='%0.0f')
 
 def update(val):
     channel=ind[int(slider.val-1)]
