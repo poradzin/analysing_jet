@@ -20,8 +20,8 @@ ppf.ppfuid("JETPPF","r")
 
 get=lambda dtyp:ppf.ppfget(pulse,dda,dtyp)
 
-initial=40
-
+initial=59
+initial_time = 40.
 
 traceNums=np.arange(95)+1
 #get all the traces
@@ -50,17 +50,18 @@ data = np.array(data)
 data = data[data[:,1].argsort()]
 ind=data[:,0].astype(int)-1
 
+
 fig, ax = plt.subplots()
 plt.subplots_adjust(left=0.25, bottom=0.25)
 ax.plot(times[initial],traces[initial])
 ax.set_ylim([0,maxT])
-ax.set_xlim([initial,maxTime])
+ax.set_xlim([initial_time,maxTime])
 ax.set_ylabel('Te (eV)')
 ax.set_xlabel('t (s)')
 ax.set_title(f'Channel: {initial}')
 ax2=ax.twinx()
 ax2.plot(Rt[initial],Rs[initial],'r.')
-ax2.set_xlim([initial,maxTime])
+ax2.set_xlim([initial_time,maxTime])
 ax2.set_ylim([2.0,4.0])
 ax2.set_ylabel('$R_{mid}$ (m)',color='r')
 sliderAxis=plt.axes([0.25, 0.1, 0.65, 0.03])
