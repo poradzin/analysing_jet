@@ -23,6 +23,7 @@ get=lambda dtyp:ppf.ppfget(pulse,dda,dtyp)
 initial=59
 initial_time = 40.
 
+# channel number
 traceNums=np.arange(96)+1
 #get all the traces
 traces=[]
@@ -48,8 +49,8 @@ for i in traceNums:
         data.append([i,np.amax(R_data)])
 data = np.array(data)
 data = data[data[:,1].argsort()]
-ind=data[:,0].astype(int)-1
-
+ind=data[:,0].astype(int)
+Rmax = data[:,1]
 
 fig, ax = plt.subplots()
 plt.subplots_adjust(left=0.25, bottom=0.25)
@@ -58,7 +59,7 @@ ax.set_ylim([0,maxT])
 ax.set_xlim([initial_time,maxTime])
 ax.set_ylabel('Te (eV)')
 ax.set_xlabel('t (s)')
-ax.set_title(f'Channel: {initial}')
+ax.set_title(f'Channel: {initial+1}')
 ax2=ax.twinx()
 ax2.plot(Rt[initial],Rs[initial],'r.')
 ax2.set_xlim([initial_time,maxTime])
@@ -68,21 +69,19 @@ sliderAxis=plt.axes([0.25, 0.1, 0.65, 0.03])
 slider=wid.Slider(sliderAxis,'Index',1,len(traces),valinit=initial,valfmt='%0.0f')
 
 def update(val):
-    channel=ind[int(slider.val)]
+    index=ind[int(slider.val)]-1
     ylim=ax.get_ylim()
     xlim=ax.get_xlim()
     ax.clear()
-    ax.plot(times[channel],traces[channel])
+    ax.plot(times[index],traces[index])
     ax.set_ylim(ylim)
     ax.set_xlim(xlim)
-    ax.set_title(f'Channel {channel+1}')
+    ax.set_title(f'Channel {index+1}, Rmax = {Rmax[int(slider.val)]:.4f}m')
     ax2.clear()
-    ax2.plot(Rt[channel],Rs[channel],'r.')
+    ax2.plot(Rt[index],Rs[index],'r.')
     ax2.set_xlim(xlim)
     ax.set_ylabel('Te (eV)')
     ax2.set_ylabel('$R_{mid}$ (m)',color='r')
-
-
 
 slider.on_changed(update)
 
