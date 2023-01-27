@@ -149,7 +149,12 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
     '''
     '''
 
-    data=[ ['NBI','PTOT','blue',False],['ICRH','PTOT','red',False] ]
+    data=(
+        ['NBI','PTOT','blue',False],
+        ['NBI4','PTOT','green',False],
+        ['NBI8','PTOT','orange',False],
+        ['ICRH','PTOT','red',False],
+    )
     times={}
     values={}
     dft={}
@@ -181,7 +186,7 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
                 if dda=='NBI':
                     #check species
                     octants = ['NBI4','NBI8']
-                    species = {}
+                    species = {'NBI':'Total'}
                     for octant in octants:
                         print(f'Checking {octant}...')
                         ppfdata = ppf.ppfdata(pulse,octant,'GAS', seq=0, uid='jetppf')
@@ -197,21 +202,33 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
 
     if plot:
         fig = plt.figure()
-        fig.suptitle(f'Heating', fontsize=13)
+        fig.suptitle(f'Heating {pulse}', fontsize=13)
         ax1 = fig.add_subplot(111)
         for dat in data:
             if dat[3]:
-                ax1.plot(times[dat[0]], values[dat[0]], color = dat[2])
+                if dat[0] in species:
+                    label = f'{dat[0]}: {species[dat[0]]}'
+                else:
+                    label = dat[0]
+                if dat[0] is 'NBI':
+                    linestyle = 'dashed'
+                else:
+                    linestyle = 'solid'
+                ax1.plot(times[dat[0]], values[dat[0]]/1.e6, color = dat[2],linestyle = linestyle, label = label)
+                #ax1.scatter(times[dat[0]], values[dat[0]], color = dat[2], label = dat[0])
+        ax1.legend()
+        ax1.set_ylabel('MW')
+        ax1.set_xlabel('seconds')
         window.addPlot('heating',fig)
         
-    if plot and data[1][3]:
+    if plot and data[-1][-1]:
         signal = [['Re','green'],['Im','red'],['P2','black']]
         fig = plt.figure()
         
         fig.suptitle(f'{data[1][0]} FFT', fontsize=13)
         ax1 = fig.add_subplot(111)
         for sig in signal:        
-            ax1.plot(range(len(dft[data[1][0]][sig[0]])),dft[data[1][0]][sig[0]], color = sig[1],label=sig[0])
+            ax1.plot(range(len(dft[data[-1][0]][sig[0]])),dft[data[-1][0]][sig[0]], color = sig[1],label=sig[0])
         ax1.legend()
         #ax.set_xlim(left=0, right=50)
         window.addPlot('ICRH FFT',fig)
@@ -325,9 +342,13 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
     '''
     '''
     #print('Namespace: ', __name__)
-    data=[['HRTS','NE','jetppf',0,'m^-3'],['HRTS','TE','jetppf',0,'eV'],#['KK3','TE02','jetppf',0,'eV'],
-          #['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
-          ['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']]
+    data=[['HRTS','NE','jetppf',0,'m^-3'],['HRTS','TE','jetppf',0,'eV'],
+          #['KK3','TE02','jetppf',0,'eV'],
+          ['CXG6','TIFS','jetppf',0,'eV'],['CXD6','TIFS','jetppf',0,'eV'],
+          #['CXG6','TICR','cxsbatch',0,'eV'],['CXD6','TICR','cxsbatch',0,'eV'],
+          ['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
+          ['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']
+          ]
     
     no_times=np.array([])
     times_minmax = np.array([])
@@ -369,10 +390,11 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
         if dat[0] in ['CXD6','CXG6']:
             no_times= np.append(no_times, len(time))
             times_minmax= np.append(times_minmax, [time[0],time[-1]])
+            print(f'{dat[0]} available from {np.min(times_minmax):2.3f}s to {np.max(times_minmax):2.3f}s. for {int(np.max(no_times))} slices.')
     if plot:
         print('Showing')
         win.show()
-    print(f'CXD6 or CXG7 available from {np.min(times_minmax):2.3f}s to {np.max(times_minmax):2.3f}s. for {int(np.max(no_times))} slices.')  
+    #print(f'CXD6 or CXG7 available from {np.min(times_minmax):2.3f}s to {np.max(times_minmax):2.3f}s. for {int(np.max(no_times))} slices.')  
 
     #return None
 def get_no_slices_and_plot(pulse,dda,dty,uid,seq,t_start,t_end,plot=True):
@@ -380,10 +402,23 @@ def get_no_slices_and_plot(pulse,dda,dty,uid,seq,t_start,t_end,plot=True):
     data2D = np.reshape(dat, (len(t), len(x)))
     n0=data2D[:,0][ np.logical_and(t>=t_start, t<=t_end) ]
     t0=t[np.logical_and(t>=ne_tstart, t<=ne_tend)]
+    textstr = '\n'.join((
+        f'{uid}/{dda}/{dty}/{seq}',
+        f'Time window: ({t0[0]:.3f},{t0[-1]:.3f})s',
+        f'No. of slices: {len(t0)}',
+        f'Freq. of slices: {len(t0)/(t0[-1]-t0[0]):.1f} s-1',
+        r'$\Delta t = $'+f'{(t0[-1]-t0[0])/len(t0)*1000:.2f}ms',
+        ))
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
     if plot:
-        print(f'{dda}/{dty} in {t0[0]:2.3f}s,{t0[-1]:2.3f}s, {len(t0)} slices')
-        plt.plot(t0,n0)
-        plt.title(f'{dda}/{dty} in {t0[0]:2.3f}s,{t0[-1]:2.3f}s, {len(t0)} slices')
+
+        plt.plot(t0,n0,label=f'{uid}/{dda}/{dty}/{seq}')
+        #plt.title(f'{uid}/{dda}/{dty}/{seq}')
+        plt.xlabel('time [s]')
+        left,right = plt.xlim()
+        bottom,up = plt.ylim()
+        plt.text(left+(right-left)*0.52,bottom+(up-bottom)*0.95,textstr, fontsize=10,verticalalignment='top',bbox=props)
+        #plt.legend()
         plt.show()
     else:
         print(f'{dda}/{dty} in {t0[0]:2.3f}s,{t0[-1]:2.3f}s, {len(t0)} slices')
@@ -397,22 +432,27 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 100854
-
+    pulse = 99817
+    
     plot=True
 
     verbose=0
 
     print(f'PULSE {pulse}\n')
         
-    #check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
+    check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
     
-    ne_tstart= 47.008
-    ne_tend = 54.5230
+    ne_tstart= 47.125
+    ne_tend =  48.985
 
-    (t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
-    #(t,x,data) = get_no_slices_and_plot(pulse,'KK3','TE01','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','TE','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'KK3','TE21','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'CXD6','TIFS','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CXG6','TIFS','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CXD6','AFCR','jetppf',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CXG6','AFCR','jetppf',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CX7C','TI','JETPPF',0,ne_tstart,ne_tend,plot=True)
 # tests of class plotWindow
     def fun(f,x):
         return f(x)

@@ -23,7 +23,7 @@ class plotWindow():
         self.current_window = -1
         self.tabs = QTabWidget()
         self.MainWindow.setCentralWidget(self.tabs)
-        self.MainWindow.resize(640, 450)
+        self.MainWindow.resize(740, 650)
         self.MainWindow.show()
 
     def addPlot(self, title, figure):
@@ -31,7 +31,7 @@ class plotWindow():
         layout = QVBoxLayout()
         new_tab.setLayout(layout)
 
-        figure.subplots_adjust(left=0.12, right=0.99, bottom=0.07, top=0.91, wspace=0.2, hspace=0.2)
+        figure.subplots_adjust(left=0.12, right=0.92, bottom=0.12, top=0.91, wspace=0.2, hspace=0.2)
         new_canvas = FigureCanvas(figure)
         new_toolbar = NavigationToolbar(new_canvas, new_tab)
 
