@@ -69,7 +69,10 @@ class Profiles():
         return self._ntne_av
     @property
     def tttd(self):
-        return self._tttd
+        if 'NT' in self._dat_list:
+            return self._tttd
+        else:
+            return None
     @property
     def tttd_av(self):
         return self._tttd_av
@@ -123,21 +126,30 @@ class Profiles():
                 print(f'No {signal} found in TRANSP output')
                 pass
     def calculate_concentrations(self):
-        self.add_data(['NH','ND','NT','NE'])
-        nd_prof = self._transp['ND']
-        nt_prof = self._transp['NT']
-        ne_prof = self._transp['NE']
+        signals = ['NH','ND','NT','NE']
+        ions = ['NT','ND','NH']
+        mass={'NT':3,'ND':2,'NH':1}
+
+        self.add_data(signals)
+	
         #integrate
-        nh_int = np.sum(self._dvol*self._transp['NH'],axis=1)
-        nd_int = np.sum(self._dvol*nd_prof,axis=1)
-        nt_int = np.sum(self._dvol*nt_prof,axis=1)
-        ne_int = np.sum(self._dvol*ne_prof,axis=1)
+        prof_int = {}
+        for sig in signals:
+            if sig in self._dat_list:
+                prof_int[sig] = np.sum(self._dvol*self._transp[sig],axis=1)
+
+        th_ion_density = sum(prof_int[ion] for ion in ions if ion in self._dat_list)
+
         # effective mass
-        self._meff = (3*nt_int+2*nd_int+nh_int)/(nt_int+nd_int+nh_int)
+        weighted_sum = sum(mass[ion]*prof_int[ion] for ion in ions if ion in self._dat_list)
+        self._meff = weighted_sum/th_ion_density
+
         # time vectors
-        self._tttd = nt_int/(nt_int+nd_int+nh_int)
-        self._ntnd = nt_int/nd_int
-        self._ntne = nt_int/ne_int
+        if 'NT' in self._dat_list:
+            self._tttd = prof_int['NT']/th_ion_density 
+            self._ntne = prof_int['NT']/prof_int['NE']
+        if 'NT' and 'ND' in self._dat_list:
+            self._ntnd = prof_int['NT']/prof_int['ND']
         # average
         self._ntne_av = np.average(self._ntne,weights=self._dt)
         self._ntnd_av = np.average(self._ntnd,weights=self._dt)
@@ -165,123 +177,123 @@ class Profiles():
         self._Rdtdd_av = np.average(self._Rdtdd,weights=self._dt)
         self._wiesen = self._ntnd/(dt_rate_wiesen/dd_rate_wiesen)
 
-
-
         return None
 
-pulse=int(sys.argv[1])
-runid=str(sys.argv[2])
-profs = Profiles(pulse, runid)
-profs.get_neutrons()
-#pulse averaged Wiesen coefficient 
-ratio = np.average(profs.ntnd/profs.Rdtdd,weights=profs.dt)
-ratio_W = np.average(profs.wiesen,weights=profs.dt)
+if __name__=='__main__': 
 
-Meff = np.average(profs.meff,weights=profs.dt)
-text = (
-r'$T_{conc}=\left<\frac{n_T}{n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.4f}%\n'
-r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av*100:.4f}%\n'
-r'$ \left<n_T/n_e\right>=$'+f'{profs.ntne_av*100:.4f}%'
-)
+    pulse=int(sys.argv[1])
+    runid=str(sys.argv[2])
+    profs = Profiles(pulse, runid)
+    profs.get_neutrons()
+    #pulse averaged Wiesen coefficient 
+    ratio = np.average(profs.ntnd/profs.Rdtdd,weights=profs.dt)
+    ratio_W = np.average(profs.wiesen,weights=profs.dt)
 
-print(f'Meff = {Meff}')
+    Meff = np.average(profs.meff,weights=profs.dt)
+    text = (
+    r'$T_{conc}=\left<\frac{n_T}{n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.4f}%\n'
+    r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av*100:.4f}%\n'
+    r'$ \left<n_T/n_e\right>=$'+f'{profs.ntne_av*100:.4f}%'
+    )
 
-props = dict(boxstyle='round', facecolor='white', alpha=0.5)
+    print(f'Meff = {Meff}')
 
-win=pw.plotWindow()
+    props = dict(boxstyle='round', facecolor='white', alpha=0.5)
 
-#fn = FigureNotebook(0, 'Tritium profiles')
-fig = plt.figure()
-fig.suptitle(f'T concentration', fontsize=13)
-ax = fig.add_subplot(111)
-#fig,ax = fn.subplots(label='Tritium concentration')
+    win=pw.plotWindow()
 
-font = {'family': 'serif',
-        'color':  'darkgreen',
-        'weight': 'normal',
-        'size': 12,
-        }
+    #fn = FigureNotebook(0, 'Tritium profiles')
+    fig = plt.figure()
+    fig.suptitle(f'T concentration', fontsize=13)
+    ax = fig.add_subplot(111)
+    #fig,ax = fn.subplots(label='Tritium concentration')
 
-ax.set_title(f'{profs.transpcid} Tritium concentration')
-ax.plot(profs.t+40.,profs.tttd*100, color='k',linewidth=2,label='nt/(nt+nd)')
-ax.plot(profs.t+40.,profs.ntne*100, color='r',linewidth=2,label='nt/ne',linestyle='dashed')
-ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
-ax.set_ylim(0., 2*np.amax(profs.tttd*100))
-xleft,xright = ax.get_xlim()
-ymin,ymax=ax.get_ylim()
-ax.set_xlabel('Time [s]')
-ax.set_ylabel('%')
+    font = {'family': 'serif',
+            'color':  'darkgreen',
+            'weight': 'normal',
+            'size': 12,
+            }
 
-ax.text(xleft+0.04*(xright-xleft),(ymax+ymin)/2+0.3*(ymax-ymin),text,fontdict=font,bbox=props)
+    ax.set_title(f'{profs.transpcid} Tritium concentration')
+    ax.plot(profs.t+40.,profs.tttd*100, color='k',linewidth=2,label='nt/(nt+nd)')
+    ax.plot(profs.t+40.,profs.ntne*100, color='r',linewidth=2,label='nt/ne',linestyle='dashed')
+    ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
+    ax.set_ylim(0., 2*np.amax(profs.tttd*100))
+    xleft,xright = ax.get_xlim()
+    ymin,ymax=ax.get_ylim()
+    ax.set_xlabel('Time [s]')
+    ax.set_ylabel('%')
 
-#cornernote(f'{profs.transpcid}', '', ax=ax)
-ax.legend()
+    ax.text(xleft+0.04*(xright-xleft),(ymax+ymin)/2+0.3*(ymax-ymin),text,fontdict=font,bbox=props)
 
-win.addPlot('T conc',fig)
+    #cornernote(f'{profs.transpcid}', '', ax=ax)
+    ax.legend()
 
-#fig,ax = fn.subplots(label='Neutron rates vs T density')
-fig = plt.figure()
-fig.suptitle(f'Neutron rates vs T density', fontsize=13)
-ax = fig.add_subplot(111)
+    win.addPlot('T conc',fig)
 
-text = (
-r'$T_{conc}=\left<\frac{n_T}{n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.3f}%\n'
-r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av:.6f}\n'
-r'$ \left<R_{DT/DD}\right>=\left<\frac{R_{nDT}}{R_{nDD}}\right>=$'+f'{profs.Rdtdd_av:.4f}\n'
-r'$ \left<(n_T/n_D)/R_{DT/DD}\right> = $'+f'{ratio:.4f}'+'\n'
-r'$ \left< Wiesen\,\, coefficient\right>:$'+f' {ratio_W:.4f}\n'
-r'$n_D,n_T,R_{nDT},R_{nTT}$ volume integrated.'
-)
+    #fig,ax = fn.subplots(label='Neutron rates vs T density')
+    fig = plt.figure()
+    fig.suptitle(f'Neutron rates vs T density', fontsize=13)
+    ax = fig.add_subplot(111)
 
-ax.set_title(f'{profs.transpcid} Neutron rates vs T density')
+    text = (
+    r'$T_{conc}=\left<\frac{n_T}{n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.3f}%\n'
+    r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av:.6f}\n'
+    r'$ \left<R_{DT/DD}\right>=\left<\frac{R_{nDT}}{R_{nDD}}\right>=$'+f'{profs.Rdtdd_av:.4f}\n'
+    r'$ \left<(n_T/n_D)/R_{DT/DD}\right> = $'+f'{ratio:.4f}'+'\n'
+    r'$ \left< Wiesen\,\, coefficient\right>:$'+f' {ratio_W:.4f}\n'
+    r'$n_D,n_T,R_{nDT},R_{nTT}$ volume integrated.'
+    )
 
-ax.plot(profs.t+40.,profs.ntnd/profs.Rdtdd, color='k',linewidth=2,label=r'$(nt/nd)/R_{DT/DD}$')
-ax.plot([profs.t[0]+40.,profs.t[-1]+40.],[ratio,ratio],linestyle='dashed',color='darkred',linewidth=2,label= 'average')
+    ax.set_title(f'{profs.transpcid} Neutron rates vs T density')
 
-ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
-ax.set_ylim(0.5*np.amin(profs.ntnd/profs.Rdtdd), 1.5*np.amax(profs.ntnd/profs.Rdtdd))
-xleft,xright = ax.get_xlim()
-ymin,ymax=ax.get_ylim()
-ax.set_xlabel('Time [s]')
-#ax.set_ylabel('%')
+    ax.plot(profs.t+40.,profs.ntnd/profs.Rdtdd, color='k',linewidth=2,label=r'$(nt/nd)/R_{DT/DD}$')
+    ax.plot([profs.t[0]+40.,profs.t[-1]+40.],[ratio,ratio],linestyle='dashed',color='darkred',linewidth=2,label= 'average')
 
-ax.text(xleft+0.04*(xright-xleft),(ymax+ymin)/2+0.12*(ymax-ymin),text,fontdict=font,bbox=props)
+    ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
+    ax.set_ylim(0.5*np.amin(profs.ntnd/profs.Rdtdd), 1.5*np.amax(profs.ntnd/profs.Rdtdd))
+    xleft,xright = ax.get_xlim()
+    ymin,ymax=ax.get_ylim()
+    ax.set_xlabel('Time [s]')
+    #ax.set_ylabel('%')
 
-#cornernote(f'{profs.transpcid}', '', ax=ax)
-ax.legend()
-win.addPlot('Neutron vs T density',fig)
+    ax.text(xleft+0.04*(xright-xleft),(ymax+ymin)/2+0.12*(ymax-ymin),text,fontdict=font,bbox=props)
 
-#fig,ax = fn.subplots(label=r'$R_{DT/DD}$')
-fig = plt.figure()
-fig.suptitle(f'R_DT/DD', fontsize=13)
-ax = fig.add_subplot(111)
+    #cornernote(f'{profs.transpcid}', '', ax=ax)
+    ax.legend()
+    win.addPlot('Neutron vs T density',fig)
 
-
-text = (
-r'$T_{conc}=\left<\frac{n_T}{n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.3f}%\n'
-r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av:.6f}\n'
-r'$ \left<R_{DT/DD}\right>=\left<\frac{R_{nDT}}{R_{nDD}}\right>=$'+f'{profs.Rdtdd_av:.4f}'
-)
-
-ax.set_title(f'{profs.transpcid} Neutron rates vs T density')
+    #fig,ax = fn.subplots(label=r'$R_{DT/DD}$')
+    fig = plt.figure()
+    fig.suptitle(f'R_DT/DD', fontsize=13)
+    ax = fig.add_subplot(111)
 
 
-ax.plot(profs.t+40.,profs.Rdtdd, color='b',linewidth=2,label=r'$R_{DT/DD}$')
-ax.plot([profs.t[0]+40.,profs.t[-1]+40.],[profs.Rdtdd_av,profs.Rdtdd_av],linestyle='dashed',color='darkred',linewidth=2,label= 'average')
+    text = (
+    r'$T_{conc}=\left<\frac{n_T}{n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.3f}%\n'
+    r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av:.6f}\n'
+    r'$ \left<R_{DT/DD}\right>=\left<\frac{R_{nDT}}{R_{nDD}}\right>=$'+f'{profs.Rdtdd_av:.4f}'
+    )
 
-ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
-ax.set_ylim(0.5*np.amin(profs.Rdtdd), 1.5*np.amax(profs.Rdtdd))
-xleft,xright = ax.get_xlim()
-ymin,ymax=ax.get_ylim()
-ax.set_xlabel('Time [s]')
-#ax.set_ylabel('%')
+    ax.set_title(f'{profs.transpcid} Neutron rates vs T density')
 
-ax.text(xleft+0.04*(xright-xleft),(ymax+ymin)/2+0.26*(ymax-ymin),text,fontdict=font,bbox=props)
 
-#cornernote(f'{profs.transpcid}', '', ax=ax)
-ax.legend()
+    ax.plot(profs.t+40.,profs.Rdtdd, color='b',linewidth=2,label=r'$R_{DT/DD}$')
+    ax.plot([profs.t[0]+40.,profs.t[-1]+40.],[profs.Rdtdd_av,profs.Rdtdd_av],linestyle='dashed',color='darkred',linewidth=2,label= 'average')
 
-win.addPlot('R_DTDD',fig)
-win.show()
+    ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
+    ax.set_ylim(0.5*np.amin(profs.Rdtdd), 1.5*np.amax(profs.Rdtdd))
+    xleft,xright = ax.get_xlim()
+    ymin,ymax=ax.get_ylim()
+    ax.set_xlabel('Time [s]')
+    #ax.set_ylabel('%')
+
+    ax.text(xleft+0.04*(xright-xleft),(ymax+ymin)/2+0.26*(ymax-ymin),text,fontdict=font,bbox=props)
+
+    #cornernote(f'{profs.transpcid}', '', ax=ax)
+    ax.legend()
+
+    win.addPlot('R_DTDD',fig)
+    win.show()
 
 
