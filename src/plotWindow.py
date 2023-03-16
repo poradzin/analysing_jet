@@ -43,6 +43,16 @@ class plotWindow():
         self.canvases.append(new_canvas)
         self.figure_handles.append(figure)
         self.tab_handles.append(new_tab)
+    
+    def cornernote(text):
+        fontsize=12
+        return self.annotate(text, xy=(0.98, 0.02), 
+                xycoords='figure fraction', 
+                fontsize=fontsize, 
+                ha='right', 
+                va='bottom', 
+                label='cornernote'
+                )
 
     def show(self):
         self.app.exec_()
