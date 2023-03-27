@@ -4,7 +4,10 @@ import profiles as ps
 import sys
 import numpy as np
 
-def getind(val,data):
+def gi(val,data):
+    '''
+    find index of data closesest to the required value
+    '''
     return np.argmin(np.abs(data-val))
 
 def compare_outputs():
@@ -32,7 +35,7 @@ def plot_profile(signal,t):
             p[run].x[gi(p[run].t,t),:],
             p[run].transp(signal)[gi(p[run].t,t),:],
             color=c,
-            linewidth=2,
+            linewidth=1,
             label=f'{p[run].runid}'
             )
         
@@ -57,7 +60,7 @@ def plot_time_trace(signal,x_pos):
             p[run].t,
             p[run].transp(signal)[:,gi(p[run].x[0],x_pos)],
             color=c,
-            linewidth=2,
+            linewidth=1,
             label=f'{p[run].runid}',
             )
             
@@ -85,26 +88,22 @@ def cornernote(axis):
 
 ############################################################
 if __name__=="__main__":
-    gi = getind
     pulse=int(sys.argv[1])
+
     signal='Q'
+    times=[1.9,4.0]
+    xpos=[0.2,0.45]
 
     p={}
     for run in sys.argv[2:]:
         p[run]=ps.Neutrons(pulse,str(run))
         p[run].add_data(signal)
+
     win=pw.plotWindow()
-    t1=1.9
-    plot_profile(signal,t1)
-    t2 = 4.0
-    plot_profile(signal,t2)
-    
-    xpos=0.45
-    plot_time_trace(signal,xpos)
-    xpos = 0.2
-    plot_time_trace(signal,xpos)
-    
-    
+    for t in times: 
+        plot_profile(signal,t)
+    for x in xpos:
+        plot_time_trace(signal,x)
     win.show()
 
 
