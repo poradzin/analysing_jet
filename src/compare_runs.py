@@ -28,7 +28,10 @@ def plot_profile(signal,t):
     fig.suptitle(f'{signal} at t= {t:.2f}', fontsize=13) 
     ax = fig.add_subplot(111)
 
-    color = iter(plt.cm.rainbow(np.linspace(0,1,len(p))))
+    #color = iter(plt.cm.rainbow(np.linspace(0,1,len(p))))
+    name = 'tab10'
+    cmap = plt.cm.get_cmap(name)
+    color = iter(cmap.colors)
     for run in p:
         c=next(color)
         ax.plot(
@@ -50,7 +53,11 @@ def plot_profile(signal,t):
 def plot_time_trace(signal,x_pos):
     '''
     '''
-    color = iter(plt.cm.rainbow(np.linspace(0,1,len(p))))
+    #color = iter(plt.cm.rainbow(np.linspace(0.1,0.9,len(p))))
+    name = 'tab10'
+    cmap = plt.cm.get_cmap(name)
+    color = iter(cmap.colors)
+
     fig = plt.figure() 
     fig.suptitle(f'{signal} at x= {x_pos:.2f}', fontsize=13) 
     ax = fig.add_subplot(111)
@@ -96,7 +103,7 @@ if __name__=="__main__":
 
     p={}
     for run in sys.argv[2:]:
-        p[run]=ps.Neutrons(pulse,str(run))
+        p[run]=ps.Transp(pulse,str(run))
         p[run].add_data(signal)
 
     win=pw.plotWindow()
