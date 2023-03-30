@@ -32,7 +32,9 @@ def plot_profile(signal,t):
     name = 'tab10'
     cmap = plt.cm.get_cmap(name)
     color = iter(cmap.colors)
+    units=[]
     for run in p:
+        units.append(p[run].units(signal))
         c=next(color)
         ax.plot(
             p[run].x[gi(p[run].t,t),:],
@@ -41,9 +43,11 @@ def plot_profile(signal,t):
             linewidth=1,
             label=f'{p[run].runid}'
             )
-        
+    if all(unit==units[0] for unit in units):
+        ax.set_ylabel(units[0])
+    else:
+        ax.set_ylabel(r'$units$')
     ax.set_xlabel('X')
-    ax.set_ylabel(r'$units$')
     cornernote(ax)
     ax.set_xlim(0.0,1.0)
     leg=ax.legend()
@@ -97,9 +101,9 @@ def cornernote(axis):
 if __name__=="__main__":
     pulse=int(sys.argv[1])
 
-    signal='Q'
-    times=[1.9,4.0]
-    xpos=[0.2,0.45]
+    signal='PRAD'
+    times=[8.1,8.2]
+    xpos=[0.6]
 
     p={}
     for run in sys.argv[2:]:

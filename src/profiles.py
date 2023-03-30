@@ -20,6 +20,8 @@ class Transp():
         self._dt = np.concatenate(([(self._t[1] - self._t[0])/2], (self._t[2:] - self._t[:-2])/2, [(self._t[-1] - self._t[-2])]))
         self._dvol = get('DVOL')
         self._transp = {}
+        self._units = {}
+        self._long_name = {}
         self._transp_names = []
         self._transp_time = []
     @property
@@ -56,6 +58,12 @@ class Transp():
         else:
             print(f'Signal {signal} not present')
             return None
+    def units(self,signal):
+        if signal in self._transp.keys():                                                           
+            return self._units[signal]
+    def long_name(self,signal):
+        if signal in self._transp.keys():                                                           
+            return self._long_name[signal]
     def signal(self,signal):
         if signal in self._transp.keys():          
             return True
@@ -76,7 +84,9 @@ class Transp():
         for sig in args:
             try:
                 #print(f'Signal  = {sig}, type(sig): {type(sig)}')
-                self._transp[sig]=get(sig)
+                self._transp[sig] = get(sig)
+                self._units[sig] = self._dat.variables[sig].units.strip()
+                self._long_name[sig] = self._dat.variables[sig].long_name.strip()
             except KeyError:
                 print(f'No {sig} found in TRANSP output')
                 pass
