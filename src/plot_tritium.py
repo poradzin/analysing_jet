@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import plotWindow as pw
 import numpy as np
 import matplotlib.pyplot as plt

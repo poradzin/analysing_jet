@@ -164,7 +164,7 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
 
         if len(value)>0:
             data[ind][3]=True
-            power_cut_off = 0.0
+            power_cut_off = 0.01
             above_cut_off = value>power_cut_off
             nonzerotimes = time[above_cut_off]
             times[dda] = nonzerotimes
@@ -346,8 +346,8 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
           #['KK3','TE02','jetppf',0,'eV'],
           ['CXG6','TIFS','jetppf',0,'eV'],['CXD6','TIFS','jetppf',0,'eV'],
           #['CXG6','TICR','cxsbatch',0,'eV'],['CXD6','TICR','cxsbatch',0,'eV'],
-          ['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
-          ['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']
+          #['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
+          #['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']
           ]
     
     no_times=np.array([])
@@ -432,7 +432,7 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 100871
+    pulse = 99776
     
     plot=True
 
@@ -442,8 +442,8 @@ if __name__=='__main__':
         
     check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
     
-    ne_tstart= 47.125
-    ne_tend =  48.985
+    ne_tstart= 46.3
+    ne_tend =  51.223
 
     #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','TE','JETPPF',0,ne_tstart,ne_tend,plot=True)

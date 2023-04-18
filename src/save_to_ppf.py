@@ -7,8 +7,6 @@
 # The generated PPF has DDA name TRAU and is created under the
 # users id.
 
-# WARNING - THE PPF OUTPUT OF THIS SCRIPT IS IN THE FORMAT SUPPORTED BY
-# JETTO. CHANGES TO THIS SCRIPT MAY PRODUCE INVALID/UNSUPPORTED OUTPUT.
 
 import ppf
 from netCDF4 import Dataset
