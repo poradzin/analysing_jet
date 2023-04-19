@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import plotWindow as pw
 import matplotlib.pyplot as plt
 import profiles as ps
