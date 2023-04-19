@@ -249,6 +249,300 @@ newunits = {**newunits, **newunits_JETTO}
 
 # Routine for summing two signals and writing them to a PPF =======================================================
 
+def convert_unit(data, unit_str):
+    # Define a dictionary of known unit conversions
+    conversion_dict = {
+        'N/CM**2': ['Pa', 10000],
+        '/SEC': ['1/s', 1],
+        'Pascals': ['Pa', 1],
+        'rad/sec': ['rad/s', 1],
+        'Tesla**2': ['T**2', 1],
+        'V/CM': ['V/m', 100],
+        'N/CM3/SEC': ['N/m**3/s', 1e6],
+        'WEBERS': ['Wb', 1],
+        'V*s': ['Wb', 1],
+        'Tesla*cm': ['T*m', 1e-1],
+        'RAD/SEC': ['rad/s', 1],
+        'CM': ['m', 0.01],
+        'CM**2': ['m**2', 1e-4],
+        'CM**3': ['m**3',1e-6],
+        'AMPS/CM2': ['A/m**2', 1e4],
+        'TESLA/CM2': ['T', 1e4],
+        'VOLT*TESLA/CM': ['V*T/m', 1e2],
+        'GRAMS/CM3': ['kg/m**3', 1e3],
+        'Tesla': ['T', 1],
+        'T*(cm/sec)': ['T*m/s', 0.01],
+        'N/SEC': ['N/s', 1],
+        '#ptcls': ['', 1],
+        'AMPS': ['A', 1],
+        'N': ['N', 1],
+        'Nt-M/CM3/(RAD/S)': ['Nt-M/m**3/(rad/s)', 1e6],
+        'WATTS': ['W', 1],
+        'eV': ['eV', 1.0],
+        'CM**2/SEC': ['m**2/s', 1e-4],
+        '1/SEC': ['1/s', 1],
+        'ATOMS/SEC': ['ATOMS/SEC', 1],
+        'CM**-1': ['m**-1', 1e2],
+        'CM**-4': ['m**-4', 1e-8],
+        'SECONDS': ['s', 1],
+        '#/CM**3': ['#/m**3', 1e6],
+        'W/cm**3': ['W/m**3', 1e6],
+        'WATTS/CM3': ['W/m**3', 1e6],
+        'NT-M': ['NT-M', 1],
+        'TESLA*CM': ['T*m', 1e-2],
+        'JLES/CM3': ['J/m**3', 1e6],
+        'WATTS/CM3/EV': ['W/m**3/eV)', 1e6],
+        'EV': ['eV', 1.0],
+        'AMP*TESLA/CM2': ['A*T/m**2',1e4],
+        '': ['',1]
+    }
+    return (data*conversion_dict[unit_str][1], conversion_dict[unit_str][0])
+def add_signal_to_cdf(rootgrp, data, new_key, time_key, x_key, units, long_name):
+    """
+    Adds a new signal to a netcdf file.
+
+    Parameters:
+    -----------
+    rootgrp: netCDF4.Dataset object
+        The netcdf4 file object.
+    data: ndarray
+        A numpy array containing the signal data to be added.
+    new_key: str
+        The name of the new signal to be added.
+    time_key: str
+        The name of the time dimension variable.
+    x_key: str
+        The name of the x dimension variable.
+    units: str
+        The units of the signal data.
+    long_name: str
+        The long name of the signal data.
+
+    Returns:
+    --------
+    None
+    """
+    outfname = "temp.nc"
+    print(f"rootgrp TIME: {rootgrp.variables['TIME']}")
+    # with rootgrp as src:                 
+                                                      
+    #     with Dataset(outfname, "w", format=src.file_format) as dst:
+    #         # copy global attributes all at once via dictionary
+    #         dst.setncatts(src.__dict__)                   
+    #         # copy dimensions                             
+    #         for name, dimension in src.dimensions.items():
+    #             dst.createDimension(                      
+    #                 name, (len(dimension) if not dimension.isunlimited() else None))
+    #         # copy all file data except for the excluded  
+    #         for name, variable in src.variables.items():
+    #                 createattrs = variable.filters()      
+    #                 if createattrs is None:               
+    #                     createattrs = {}                  
+    #                 else:                                 
+    #                     chunksizes = variable.chunking()  
+    #                     print(createattrs)                
+    #                     if chunksizes == "contiguous":    
+    #                         createattrs["contiguous"] = True
+    #                     else:                             
+    #                         createattrs["chunksizes"] =  chunksizes
+    #                 x = dst.createVariable(name, variable.datatype, variable.dimensions, **createattrs)
+    #                 # copy variable attributes all at once via dictionary
+    #                 dst[name].setncatts(src[name].__dict__)
+    #                 dst[name][:] = src[name][:]
+            
+    # Create a new in-memory netCDF4 dataset
+    #new_rootgrp = Dataset("temp.nc", "w", format="NETCDF4")
+
+    # Add dimensions to the new dataset
+    #new_rootgrp.createDimension(time_key, data.shape[0])
+    #new_rootgrp.createDimension(x_key, data.shape[1])
+
+    # Copy variables from the original dataset to the new one
+    # for varname, ncvar in rootgrp.variables.items():
+    #     # Create a new variable in the new dataset
+    #     #if varname is 'TIME':
+    #     #print(f'varname: {varname}. ncvar dimension: {ncvar}')
+    #     new_var = new_rootgrp.createVariable(varname, ncvar.dtype, ncvar.dimensions)
+    #     # Copy data from the original variable to the new one
+    #     new_var[:] = ncvar[:]
+    #     # Copy attributes from the original variable to the new one
+    #     for attrname in ncvar.ncattrs():
+    #         new_var.setncattr(attrname, ncvar.getncattr(attrname))
+
+    # Add the new signal to the new dataset
+    #signal_var = new_rootgrp.createVariable(new_key, 'f', (time_key, x_key))
+    #signal_var.units = units
+    #signal_var.long_name = long_name
+    #signal_var[:, :] = data
+
+    # Close the new dataset
+    #new_rootgrp.close()
+
+    # Read the new dataset into memory and delete the temporary file
+    #with open("temp.nc", "rb") as f:
+    #    new_data = f.read()
+    #os.remove("temp.nc")
+
+    # Append the new signal data to the original dataset
+    #rootgrp.write(new_data, end=len(rootgrp))
+
+
+
+
+def linear_composite(rootgrp, new_signal, signals):
+    """
+    Creates a linear combination of signals and returns numpy array .
+
+    Parameters:
+    -----------
+    rootgrp: netCDF4.Dataset object
+        The netcdf4 file object.
+    new_signal: str
+        The name of the new signal to be created.
+    signals: dict
+        A dictionary of signals to be combined in the form {signal_name: coefficient}.
+
+    Returns:
+    --------
+    bool:
+        Returns True if the signal was added successfully, and False otherwise.
+    """
+    # Check that all signals exist in the rootgrp
+    signals_copy = signals.copy()
+    for signal in signals_copy.keys():
+        if signal not in rootgrp.variables:
+            print(f"{signal} not found in NETCDF file")
+            signals.pop(signal)
+            #del_signals[signal]
+
+    # Check if signals is empty
+    if not signals:
+        print("No valid signals were found in the NetCDF file.")
+        return False
+
+    # Check if the new signal key already exists in the NetCDF file
+    if new_signal in rootgrp.variables:
+        print(f"{new_signal} already exists in the NetCDF file.")
+        return False
+    
+    # Check that all signals have the same shape
+    shapes = [rootgrp.variables[signal].shape for signal in signals.keys()]
+    #print(f'Shapes: {shapes}')
+    if len(set(shapes)) > 1:
+        print("Signals have different shapes!")
+        return
+    else:
+        shape = shapes[0]
+        #print(f'Shape: {shape}')
+    
+    # Check that all signals have the same units
+    units = [rootgrp.variables[signal].units.strip() for signal in signals.keys()]
+    if len(set(units)) > 1:
+        print("Signals have different units!{signals.keys()}:{units}")
+        return
+    else:
+        # Get the units for a new signal
+        units = units[0]
+
+    # check dimensions 
+    dims = [len(rootgrp.variables[signal].dimensions) for signal in signals.keys()]
+    if len(set(dims)) > 1:
+        print("Signals have different dimensions! {signals.keys()}:{dims}")
+        return 
+    else:
+        dims = dims[0]
+        #print(f'Dimensions: {dims}')
+
+    #check dimension keys if the same for all signals
+    dim_keys = [None]*dims
+    dim_keys_all = [None]*dims
+    for ind,x  in enumerate(dim_keys_all):
+        dim_keys_all[ind] = [rootgrp.variables[signal].dimensions[ind] for signal in signals.keys()]
+        if len(set(dim_keys_all[ind])) > 1:
+            print(f"Signals have different {ind} dimension! {dim_keys_all[ind]}")
+            return
+        else:
+            dim_keys[ind] = dim_keys_all[ind][0]
+        
+    #print(f'Dimension keys: {dim_keys}')
+
+
+    # define tunits and xunits 
+    tunits = rootgrp.variables[dim_keys[0]].units.strip() 
+    if len(dim_keys)==2:
+        xunits = rootgrp.variables[dim_keys[1]].units.strip()  # X dimension units
+    else:
+        xunits = None
+
+    # Create the new signal as a linear combination of the given signals
+    data = sum([rootgrp.variables[signal][:] * coeff for signal, coeff in signals.items()])
+    
+           
+    #print(f'units: {units}')
+    #print(f'shape(data): {np.shape(data)}')
+
+    # Create along name
+    long_name = ""
+    for signal, coeff in signals.items():
+        if coeff < 0:
+            long_name += f"-{abs(coeff):.2f}*{signal}"
+        else:
+            long_name += f"+{coeff:.2f}*{signal}"
+
+    # Remove the leading plus sign from the long_name
+    if long_name[0] == "+":
+        long_name = long_name[1:]
+    #print(f'{new_signal} long_name: {long_name}')
+    desc = long_name
+    time_key = dim_keys[0]
+    if len(dim_keys)==2:
+        x_key = dim_keys[1]
+    #print(f'time_key: {time_key}, x_key: {x_key}')
+    return (data, shape,dim_keys, units, xunits, tunits, desc)
+
+
+import numpy as np
+
+def check_signal(rootgrp, signal_name):
+    """
+    Check if a signal exists in a NetCDF file and verifies its properties.
+    
+    Args:
+    - rootgrp: netCDF4.Dataset object representing the NetCDF file
+    - signal_name: string representing the name of the signal to check
+    
+    Returns:
+    - A dictionary containing the following keys and values:
+      - "exists": a boolean indicating whether the signal exists in the NetCDF file
+      - "units": a string representing the units of the signal (or None if the signal does not exist)
+      - "long_name": a string representing the long_name of the signal (or None if the signal does not exist)
+      - "shape": a tuple representing the shape of the signal (or None if the signal does not exist)
+      - "min_value": a float representing the minimum value of the signal (or None if the signal does not exist)
+      - "max_value": a float representing the maximum value of the signal (or None if the signal does not exist)
+      - "avg_value": a float representing the average value of the signal (or None if the signal does not exist)
+    """
+    signal_exists = signal_name in rootgrp.variables
+    signal_properties = {
+        "exists": signal_exists,
+        "units": None,
+        "long_name": None,
+        "shape": None,
+        "min_value": None,
+        "max_value": None,
+        "avg_value": None
+    }
+    
+    if signal_exists:
+        signal = rootgrp.variables[signal_name]
+        signal_properties["units"] = signal.units.strip()
+        signal_properties["long_name"] = signal.long_name.strip()
+        signal_properties["shape"] = signal.shape
+        signal_values = signal[:]
+        signal_properties["min_value"] = np.min(signal_values)
+        signal_properties["max_value"] = np.max(signal_values)
+        signal_properties["avg_value"] = np.mean(signal_values)
+    
+    return signal_properties
 
 def addtwo(pulse, signal1, signal2, signal3, rootgrp, DDAname, signals, conversions, newunits):
 
@@ -287,6 +581,70 @@ def addtwo(pulse, signal1, signal2, signal3, rootgrp, DDAname, signals, conversi
     # Write Signal
     iwdat, ier = ppf.ppfwri(
         pulse, DDAname, signal3, irdat, ihdat, data, rootgrp.variables[rootgrp.variables[signal1].dimensions[1]][:], times
+    )
+
+def add_composite_signal(pulse, rootgrp,new_signal, composite, integrate=False):
+
+
+    (data,shape, dim_keys, units, xunits, tunits, desc) = linear_composite(rootgrp,new_signal, composite)
+
+    data, units = convert_unit(data, units)    
+    # for 1D time traces nx=1
+    nt, nx = 1, 1
+    size = [nt, nx]
+    # first position in shape is time dimension, second position in shape is x dimension
+    for i, var in enumerate(shape):
+        size[i] = var
+
+    [nt, nx] = size  
+    if integrate and nx>1:
+        print(f'{new_signal} integration along X')  
+        dvol = rootgrp.variables['DVOL'][:]
+        dvol_units = rootgrp.variables['DVOL'].units.strip() 
+        #print(f'dvol_units: {dvol_units}')
+        #test, dvol_units = convert_unit(1,dvol_units)
+        #print(f'dvol_units: {dvol_units}')
+        dvol, dvol_units = convert_unit(dvol,dvol_units)
+        # upper triangle array with ones
+        upper = np.triu(np.ones((nx,nx)))
+        # cumulative integration
+        data_cum = np.dot(dvol*data,upper)
+        data = data_cum[:,-1]
+        units = units.replace('/m**3', '', 1).replace('m**-3', '', 1)
+
+        nx=1
+    elif integrate and nx==1:
+        print(f'{new_signal}: 1D signal - NOT integrating in X dimension')
+    # Write a signal
+    # refx =-1  a new vector is to be written
+    # refx = 0  NO vector is to be written, x_values will be ignored in ppfwri
+    if nx > 1:
+        refx = -1
+        x_values = rootgrp.variables[dim_keys[1]][:]
+    else:
+        refx = 0
+        x_values = None
+
+    # Change time vector by 40s to convery to 'real time'
+    times = [t + 40.0 for t in rootgrp.variables[dim_keys[0]][:]]
+
+    # New units
+    #dunits = newunits[signal1]
+    dunits = units
+    # Write signal
+    
+    irdat = ppf.ppfwri_irdat(nx, nt, refx=refx, reft=-1, user=0, system=0)
+    ihdat = ppf.ppfwri_ihdat(dunits, xunits, tunits, "f", "f", "f", desc)
+
+    #data = rootgrp.variables[signal1][:] + rootgrp.variables[signal2][:]
+
+    # scale data by conversion factor
+    #data = [datum * conversions[signal1] for datum in data]
+
+    ##Write Signal
+    print(f'Writing {new_signal}')
+    iwdat, ier = ppf.ppfwri(
+        pulse, DDAname, new_signal, irdat, ihdat, data, x_values, times
     )
 # subroutine for space cumulative integral integral
 
@@ -487,6 +845,8 @@ def main(pulse,runid,DDAname, signals, conversions, newunits):
 
     #cum_int(pulse, rootgrp, signals_to_int)
     #Set user ID
+
+
     ier = ppf.ppfuid(user, "w")
 
     comment = f"TRANSP inputs to JETTO from run {runid}"
@@ -495,12 +855,26 @@ def main(pulse,runid,DDAname, signals, conversions, newunits):
     date = '000000'
 
     openPPF(pulse, date, time, comment, status=0)
-
+    # save signals here
     save_signal(pulse, DDAname, rootgrp, signals)
 
     create_composite(pulse, rootgrp, DDAname, signals, conversions, newunits)
     cum_int(pulse, rootgrp, signals_to_int)
+    
+    # WDIA = 1.5*UFASTPP+ UTHRM
+    composite = {'UFASTPP':1.5, 'UTHRM':1.0}
+    new_signal = 'WDIA'
+    add_composite_signal(pulse, rootgrp,new_signal, composite, integrate=True)
+
+    # WMHD = 0.75*UFASTPP + 1.5*(UFASTPA+UPHI) + UTHRM
+    composite = {'UFASTPP':0.75,'UFASTPA':1.5,'UPHI':1.5, 'UTHRM':1.0}
+    new_signal = 'WMHD'
+    add_composite_signal(pulse, rootgrp,new_signal, composite, integrate=True)
+    # end of saving signals
     close_PPF(pulse, rootgrp)
+
+    #composite = {'UFASTPP':1.5, 'UTHRM':-1.0,'PLUPLU':1.0}
+    #linear_composite(rootgrp,'WDIA', composite)
 
 if __name__ =='__main__':
     
