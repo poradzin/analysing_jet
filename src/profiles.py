@@ -6,6 +6,9 @@ from scipy.interpolate import interp1d
 import sys
 import plotWindow as pw
 
+def gi(x,y):
+    return (np.abs(x - y)).argmin()
+
 class Transp():
     def __init__(self,pulse,runid):
         self._pulse = pulse
@@ -326,7 +329,128 @@ class EXP():
     def hthd(self):
         return self._hthd
 
+
+class Eq():
+    def __init__(self,pulse, dda='EFTP', uid='jetppf', seq=0):
+        self._pulse = pulse
+        self._dda = dda
+        self._uid = uid
+        self._seq = seq
+        self._init_data()
+
+    def get_dat(self,dtype, kwargs={}):
+        return ppf.ppfdata(self._pulse, self._dda,dtype,uid=self._uid,seq=self._seq,**kwargs)
+
+    def _init_data(self):
+        self._Q, self._x, self._t, *_, ier = self.get_dat('Q')
+        #*_, ier = get_dat('Q')
+        if ier != 0:  # Check PPF status
+            raise DataNotFoundError('Error initialising equlibrium PPF routines. Aborting.')
+        self._Rmag, *_ = self.get_dat('RMAG')
+        self._Zmag, *_ = self.get_dat('ZMAG')
+        self._cr0, *_  = self.get_dat('CR0')
+        self._elon, *_ = self.get_dat('ELON')
+        self._triu, *_ = self.get_dat('TRIU')
+        self._tril, *_ = self.get_dat('TRIL')
+        self._faxs, *_ = self.get_dat('FAXS')
+        self._fbnd, *_ = self.get_dat('FBND')
+        self._Rbnd, *_ = self.get_dat('RBND', kwargs={'reshape':(-1, len(self._t))})
+        self._Zbnd, *_ = self.get_dat('ZBND', kwargs={'reshape':(-1, len(self._t))})
+        self._psir, *_ = self.get_dat('PSIR')
+        self._psiz, *_ = self.get_dat('PSIZ')
+        self._psi, *_ = ppf.ppfdata(
+            self._pulse, self._dda, 'PSI', reshape=(len(self._psir) * len(self._psiz), len(self._t)), uid=self._uid, seq=self._seq
+        )
+        self._vjac, self._vjac_x, *_ = ppf.ppfdata(
+            self._pulse, self._dda, 'VJAC', reshape=(len(self._x), len(self._t)), uid=self._uid, seq=self._seq
+        )
+        self._ftor, self._ftor_x, *_ = ppf.ppfdata(
+            self._pulse, self._dda, 'FTOR', reshape=(len(self._x), len(self._t)), uid=self._uid, seq=self._seq
+        )
+        self._psirzmg = np.meshgrid(self._psir, self._psiz)
+        self._sqrt_psi_norm = np.ones(self._psi.shape)
+        self._sqrt_ftor_norm = np.ones(self._ftor.shape)
+        for ic in range(len(self._t)):
+            self._sqrt_psi_norm[ic, :] = np.sqrt(
+                (self._psi[ic, :] - self._faxs[ic]) / (self._fbnd[ic] - self._faxs[ic]))  # sqrt_psi_norm=rho_pol(R,Z)
+            self._sqrt_ftor_norm[ic, :] = np.sqrt(
+                self._ftor[ic, :] / self._ftor[ic, -1]
+            )
+    @property
+    def t(self):
+        return self._t
+    @property
+    def Zmag(self):
+        return self._Zmag
+    @property
+    def Rmag(self):
+        return self._Rmag
+    def rhop_to_rhot(self, t1, rhop):
+        ix_t1 = (np.abs(self._t - t1)).argmin()
+        f_efit_rhop_to_rhot = interp1d(np.sqrt(self._ftor_x), self._sqrt_ftor_norm[ix_t1, :], fill_value='extrapolate')
+        return f_efit_rhop_to_rhot(rhop)
+
+    def vjac_on_rhop(self,t1, rhop):
+        ix_t1 = (np.abs(self._t - t1)).argmin()
+        f_efit_vjac_on_rhop = interp1d(np.sqrt(self._vjac_x), self._vjac[ix_t1, :], fill_value='extrapolate')
+        return f_efit_vjac_on_rhop(rhop)
+
+    def rhot_to_rhop(self,t1, rhot):
+        ix_t1 = (np.abs(self._t - t1)).argmin()
+        f_efit_rhot_to_rhop = interp1d(self._sqrt_ftor_norm[ix_t1, :], np.sqrt(self._ftor_x), fill_value='extrapolate')
+        return f_efit_rhot_to_rhop(rhot)
+
+    def RZ_to_rhop(self,t1, RZ):
+        RZ = RZ.T if RZ.shape[0] == 2 else RZ if RZ.shape[1] == 2 else np.nan * np.ones((2))
+        ix_t1 = (np.abs(self._t - t1)).argmin()
+        size_efit_psirzmg = np.product(self._psirzmg[0].shape)
+        rho_pol_on_RZ = scipy.interpolate.griddata(
+            (np.reshape(self._psirzmg[0], (size_efit_psirzmg,)), np.reshape(self._psirzmg[1], (size_efit_psirzmg,))),
+            np.reshape(self._sqrt_psi_norm[ix_t1, :], (size_efit_psirzmg,)),
+            RZ,
+            method='cubic',
+        )
+        return rho_pol_on_RZ
+
+    def RZ_to_rhot(self,t1, RZ):
+        rho_pol_on_RZ1 = self.RZ_to_rhop(t1, RZ)
+        rho_tor_on_RZ = self.rhop_to_rhot(t1, rho_pol_on_RZ1)
+        return rho_tor_on_RZ
+
+    def rhop_to_RZ(self, t1, rhopa, numRZ=100):  #
+        ix_t1 = (np.abs(self._t - t1)).argmin()
+        arad = np.max(
+            np.sqrt((self._Rbnd[ix_t1, :] - self._Rmag[ix_t1]) ** 2 + (self._Zbnd[ix_t1, :] - self._Zmag[ix_t1]) ** 2))
+        RZrho = np.nan * np.ones((len(rhopa), 2, numRZ))
+        for ic, rhop in zip(range(len(rhopa)), rhopa):
+            for jc, alph in zip(range(numRZ), np.linspace(0.0, 2.0 * np.pi, num=numRZ, endpoint=True)):
+                arada = np.linspace(0.0, arad, 300, endpoint=True)
+                RZl = np.array([self._Rmag[ix_t1] + arada * np.cos(alph), self._Zmag[ix_t1] + arada * np.sin(alph)])
+                ixRZl = np.nanargmin(np.abs(self.RZ_to_rhop(t1, RZl) - rhop))
+                RZrho[ic, :, jc] = RZl[:, ixRZl]
+        return RZrho
+    @property
+    def map(self):
+        # connection between NRINER value and remapping function
+        # Everything is mapped onto Square root normalized toroidal flux, that is NRINER=5
+        map = {
+            5: lambda time, x: x,
+            6: lambda time, x: self.rhop_to_rhot(time, np.sqrt(x)),
+            7: lambda time, x: self.rhop_to_rhot(time, x),
+            8: lambda time, x: np.sqrt(x),
+        }
+        return map[nriner]
     
+    def Q(self):
+        return self._Q.reshape((len(self._t), len(self._x)))
+    @property
+    def rntf(self):
+        '''
+        square root of normalized toroidal flux
+        '''   
+        return self._sqrt_ftor_norm
+
+
 
 
 
