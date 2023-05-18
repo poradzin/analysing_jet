@@ -30,6 +30,8 @@ class QProfileGUI:
         self.follow_q_entries = []  # Add this line
         self.follow_q_transp_checkboxes = []  # Add this line
         self.follow_q_transp_entries = []  # Add this line
+        self.qmax = 0
+        self.qmin=None
 
 
         self.time_entry = None
@@ -350,6 +352,27 @@ class QProfileGUI:
         ax.grid(True, which='both', color='gray', linewidth=0.5)
         ax.tick_params(direction='out')
         ax.set_frame_on(True)
+        def find_qminmax(follow_1, follow_2):
+            follow_q_entries=follow_1+follow_2
+            q_values = []
+            for follow_q_entry in follow_q_entries:
+                q_values.append([float(q.strip()) for q in follow_q_entry.split(",")])
+            qmax = max(max(q) for q in q_values)
+            qmin = min(min(q) for q in q_values)
+            return (qmin,qmax)
+
+        qmin,qmax = find_qminmax(follow_q_entries,follow_q_transp_entries)
+
+        def color_map(x):
+            cmin = 0.4
+            cmax = 0.9
+            #colormap = 'nipy_spectral'
+            colormap = 'YlOrBr'
+            if qmax>qmin:
+                return plt.get_cmap(colormap)((x-qmin)/(qmax-qmin)*(cmax-cmin)+cmin)
+            else:
+                return plt.get_cmap(colormap)(0.5)
+
         # Plot follow_q for equilibrium pulses
         for eq_pulse_entry, dda_entry, uid_entry, seq_entry, follow_q_entry in zip(
                 eq_pulse_entries, dda_entries, uid_entries, seq_entries, follow_q_entries):
@@ -378,7 +401,8 @@ class QProfileGUI:
                         q_loc.append(None)
 
                 # Plot the q value evolution
-                ax.plot(eq.t, q_loc, label=f"Pulse {pulse}/{dda}/{uid}/{seq}, q={q_value}")
+                color = color_map(q_value)
+                ax.plot(eq.t, q_loc, label=f"Pulse {pulse}/{dda}/{uid}/{seq}, q={q_value}", color=color)
 
         # Plot follow_q for TRANSP pulses
         for transp_pulse_entry, runid_entry, follow_q_transp_entry in zip(
@@ -411,11 +435,18 @@ class QProfileGUI:
                             q_loc.append(None)
 
                     # Plot the q value evolution for TRANSP pulses
-                    ax.plot(transp.t + 40., q_loc, label=f"Pulse {pulse}/{runid}, q={q_value}")
+                    color = color_map(q_value)
+                    ax.plot(transp.t + 40., q_loc, label=f"Pulse {pulse}/{runid}, q={q_value}",color=color)
 
         ax.set_xlabel('Time')
         ax.set_ylabel('X')
         ax.set_title("Follow q Value")
+
+        # Create color bar
+        sm = plt.cm.ScalarMappable(cmap='YlOrBr', norm=plt.Normalize(vmin=qmin, vmax=qmax))
+        sm.set_array([])
+        cbar = plt.colorbar(sm)
+        cbar.set_label('q values')
         legend = ax.legend()
 
         # Make the legend draggable
