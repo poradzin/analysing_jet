@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import profiles as pr
 import numpy as np
+import scipy as sc
+#from scipy.interpolate import interp1d
+
 
 
 def get_index(x, y):
@@ -23,6 +26,11 @@ class QProfileGUI:
         self.dda_entries = []
         self.uid_entries = []
         self.seq_entries = []
+        self.follow_q_checkboxes = []  # Add this line
+        self.follow_q_entries = []  # Add this line
+        self.follow_q_transp_checkboxes = []  # Add this line
+        self.follow_q_transp_entries = []  # Add this line
+
 
         self.time_entry = None
         self.plot_type_var = tk.StringVar()
@@ -32,6 +40,7 @@ class QProfileGUI:
         self.create_plot_type_input()
         self.create_time_input()
         self.create_plot_button()
+        self.create_follow_q_plot_button()
 
     def create_equilibrium_inputs(self):
         """Create widgets for equilibrium inputs."""
@@ -41,7 +50,7 @@ class QProfileGUI:
         eq_label = tk.Label(eq_frame, text="Equilibria")
         eq_label.pack()
 
-        num_eq_label = tk.Label(eq_frame, text="Number of Equilibria:")
+        num_eq_label = tk.Label(eq_frame, text="Number of equilibria from ppf:")
         num_eq_label.pack(side=tk.LEFT)
 
         self.num_eq_entry = tk.Entry(eq_frame)
@@ -93,6 +102,28 @@ class QProfileGUI:
         plot_button = tk.Button(self.master, text="Plot", command=self.plot_q_profiles)
         plot_button.pack()
 
+    def create_follow_q_plot_button(self):
+        """Create the Follow Q Plot button."""
+        follow_q_plot_button = tk.Button(self.master, text="Plot Follow Q", command=self.plot_follow_q_profiles)
+        follow_q_plot_button.pack()
+
+    def plot_follow_q_profiles(self):
+        try:
+            eq_pulse_entries = self.eq_pulse_entries
+            dda_entries = self.dda_entries
+            uid_entries = self.uid_entries
+            seq_entries = self.seq_entries
+            follow_q_entries = [entry.get() for entry in self.follow_q_entries]
+
+            transp_pulse_entries = self.transp_pulse_entries
+            runid_entries = self.runid_entries
+            follow_q_transp_entries = [entry.get() for entry in self.follow_q_transp_entries]
+
+            self.follow_q_plot(eq_pulse_entries, dda_entries, uid_entries, seq_entries, follow_q_entries,
+                          transp_pulse_entries, runid_entries, follow_q_transp_entries)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
     def update_equilibrium_inputs(self):
         """Update widgets for equilibrium inputs based on user input."""
         num_eq = int(self.num_eq_entry.get())
@@ -104,6 +135,8 @@ class QProfileGUI:
         self.dda_entries.clear()
         self.uid_entries.clear()
         self.seq_entries.clear()
+        self.follow_q_checkboxes.clear()
+        self.follow_q_entries.clear()
 
         for i in range(num_eq):
             eq_input_frame = tk.Frame(self.master)
@@ -120,6 +153,47 @@ class QProfileGUI:
 
             seq_label, seq_entry = self.create_label_entry_pair(eq_input_frame, "Sequence:")
             self.seq_entries.append(seq_entry)
+
+            follow_q_var = tk.BooleanVar()
+            follow_q_check = tk.Checkbutton(eq_input_frame, text="Follow q=", variable=follow_q_var)
+            follow_q_check.pack(side=tk.LEFT)
+            self.follow_q_checkboxes.append(follow_q_var)
+
+            follow_q_entry = tk.Entry(eq_input_frame)
+            follow_q_entry.pack(side=tk.LEFT)
+            self.follow_q_entries.append(follow_q_entry)
+
+    def update_transp_inputs(self):
+        """Update widgets for TRANSP inputs based on user input."""
+        num_transp = int(self.num_transp_entry.get())
+
+        for entry in self.transp_pulse_entries + self.runid_entries + self.follow_q_transp_checkboxes + self.follow_q_transp_entries:
+            entry.destroy()
+
+        self.transp_pulse_entries.clear()
+        self.runid_entries.clear()
+        self.follow_q_transp_checkboxes.clear()
+        self.follow_q_transp_entries.clear()
+
+        for i in range(num_transp):
+            transp_input_frame = tk.Frame(self.master)
+            transp_input_frame.pack()
+
+            pulse_label, pulse_entry = self.create_label_entry_pair(transp_input_frame, f"Pulse {i+1}:")
+            self.transp_pulse_entries.append(pulse_entry)
+
+            runid_label, runid_entry = self.create_label_entry_pair(transp_input_frame, "RunIds:")
+            self.runid_entries.append(runid_entry)
+
+            follow_q_var = tk.BooleanVar()
+            follow_q_check = tk.Checkbutton(transp_input_frame, text="Follow q=", variable=follow_q_var)
+            follow_q_check.pack(side=tk.LEFT)
+            self.follow_q_transp_checkboxes.append(follow_q_var)
+
+            follow_q_entry = tk.Entry(transp_input_frame)
+            follow_q_entry.pack(side=tk.LEFT)
+            self.follow_q_transp_entries.append(follow_q_entry)
+
 
     def create_label_entry_pair(self, parent, label_text):
         """Create a pair of label and entry, and pack them into the parent frame."""
@@ -147,25 +221,6 @@ class QProfileGUI:
         num_transp_button = tk.Button(transp_frame, text="Set", command=self.update_transp_inputs)
         num_transp_button.pack(side=tk.LEFT)
 
-    def update_transp_inputs(self):
-        """Update widgets for TRANSP inputs based on user input."""
-        num_transp = int(self.num_transp_entry.get())
-
-        for entry in self.transp_pulse_entries + self.runid_entries:
-            entry.destroy()
-
-        self.transp_pulse_entries.clear()
-        self.runid_entries.clear()
-
-        for i in range(num_transp):
-            transp_input_frame = tk.Frame(self.master)
-            transp_input_frame.pack()
-
-            pulse_label, pulse_entry = self.create_label_entry_pair(transp_input_frame, f"Pulse {i+1}:")
-            self.transp_pulse_entries.append(pulse_entry)
-
-            runid_label, runid_entry = self.create_label_entry_pair(transp_input_frame, "RunIds:")
-            self.runid_entries.append(runid_entry)
 
     def plot_q_profiles(self):
         try:
@@ -189,7 +244,6 @@ class QProfileGUI:
 
             try:
                 num_transp = int(self.num_transp_entry.get())
-                print(f'num_transp: {num_transp}')
             except ValueError:
                 print("Invalid number of TRANSP Runs. Please input an integer.")
                 return
@@ -205,9 +259,13 @@ class QProfileGUI:
                 dda = self.dda_entries[i].get()
                 uid = self.uid_entries[i].get()
                 seq = int(self.seq_entries[i].get())
-
-                eq = pr.Eq(pulse=pulse, dda=dda, uid=uid, seq=seq)
-                self.equilibria.append(eq)
+                try:
+                    eq = pr.Eq(pulse=pulse, dda=dda, uid=uid, seq=seq)
+                    self.equilibria.append(eq)
+                except OSError as err:
+                    print(err)
+                    print(f'PPF: {pulse}/{dda}/{uid}/{seq} not found.')
+                    continue
 
                 for time in time_slices:
                     ti = np.abs(eq.t - time).argmin() if plot_type == 'Profile' else np.abs(eq.rntf - time).argmin(axis=1)
@@ -216,8 +274,6 @@ class QProfileGUI:
                     elif plot_type == 'Time Trace':
                         q = np.array([eq.Q()[i, ti[i]] for i in range(len(ti))])
                         ax.plot(eq.t, q, label=f"{pulse}/{dda}/{uid}/{seq}, X={time}")
-
-            #linestyles = [ (0, ()), (0, (1, 1)),(0, (5, 10))), (0, (5, 5))), (0, (3, 5, 1, 5))), (0, (5, 1)))]
 
             linestyles_tuples = [
                 ('solid', (0,())),
@@ -274,6 +330,8 @@ class QProfileGUI:
             ax.set_xlabel('X' if plot_type == 'Profile' else 'Time')
             ax.set_ylabel('Q')
             ax.set_ylim(bottom=0.0)
+            if plot_type == 'Profile':
+                ax.set_xlim(left=0,right=1)
             ax.legend()
 
             plt.show()
@@ -282,6 +340,131 @@ class QProfileGUI:
             self.transp_runs.clear()
         except Exception as e:
             print(f"An error occurred: {e}")
+
+    @staticmethod
+    def follow_q_plot(eq_pulse_entries, dda_entries, uid_entries, seq_entries, follow_q_entries,
+                      transp_pulse_entries, runid_entries, follow_q_transp_entries):
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.set_facecolor('white')
+        ax.grid(True, which='both', color='gray', linewidth=0.5)
+        ax.tick_params(direction='out')
+        ax.set_frame_on(True)
+        # Plot follow_q for equilibrium pulses
+        for eq_pulse_entry, dda_entry, uid_entry, seq_entry, follow_q_entry in zip(
+                eq_pulse_entries, dda_entries, uid_entries, seq_entries, follow_q_entries):
+            pulse = int(eq_pulse_entry.get())
+            dda = dda_entry.get()
+            uid = uid_entry.get()
+            seq = int(seq_entry.get())
+            follow_q_values = [float(q.strip()) for q in follow_q_entry.split(",")]
+
+            eq = pr.Eq(pulse=pulse, dda=dda, uid=uid, seq=seq)
+
+            for follow_q in follow_q_values:
+                q_value = follow_q
+                q_loc = []
+                for t, q in enumerate(eq.Q()):
+                    cross_indices = np.where(np.diff(np.sign(q - q_value)))[0]
+                    if len(cross_indices) > 0:
+                        locs = []
+                        for ind in cross_indices:
+                            x = [eq.rntf[t, ind], eq.rntf[t, ind + 1]]
+                            y = [q[ind], q[ind + 1]]
+                            f = sc.interpolate.interp1d(y, x)
+                            locs.append(f(q_value))
+                        q_loc.append(np.mean(locs))
+                    else:
+                        q_loc.append(None)
+
+                # Plot the q value evolution
+                ax.plot(eq.t, q_loc, label=f"Pulse {pulse}/{dda}/{uid}/{seq}, q={q_value}")
+
+        # Plot follow_q for TRANSP pulses
+        for transp_pulse_entry, runid_entry, follow_q_transp_entry in zip(
+                transp_pulse_entries, runid_entries, follow_q_transp_entries):
+            pulse = int(transp_pulse_entry.get())
+            runids = runid_entry.get().split(',')
+            follow_q_transp_values = [float(q.strip()) for q in follow_q_transp_entry.split(",")]
+            for runid in runids:
+                runid = runid.strip()
+                transp = pr.Transp(pulse, runid)
+                transp.add_data('Q')
+
+                for follow_q in follow_q_transp_values:
+                    #follow_q = float(follow_q)
+
+                    q_value = follow_q
+                    q_loc = []
+                    for t, q in enumerate(transp.transp('Q')):
+                        cross_indices = np.where(np.diff(np.sign(q - q_value)))[0]
+                        if len(cross_indices) > 0:
+                            locs = []
+                            for ind in cross_indices:
+                                # x is a 2d array, account for that
+                                x = [transp.x[t,ind], transp.x[t,ind + 1]]
+                                y = [q[ind], q[ind + 1]]
+                                f = sc.interpolate.interp1d(y, x)
+                                locs.append(f(q_value))
+                            q_loc.append(np.mean(locs))
+                        else:
+                            q_loc.append(None)
+
+                    # Plot the q value evolution for TRANSP pulses
+                    ax.plot(transp.t + 40., q_loc, label=f"Pulse {pulse}/{runid}, q={q_value}")
+
+        ax.set_xlabel('Time')
+        ax.set_ylabel('X')
+        ax.set_title("Follow q Value")
+        legend = ax.legend()
+
+        # Make the legend draggable
+        legend.set_draggable(True)
+
+        plt.show()
+
+    def follow_qq_plot(eq_pulse_entries, dda_entries, uid_entries, seq_entries, follow_q_entries):
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+
+        for eq_pulse_entry, dda_entry, uid_entry, seq_entry, follow_q_entry in zip(
+                eq_pulse_entries, dda_entries, uid_entries, seq_entries, follow_q_entries):
+            pulse = int(eq_pulse_entry.get())
+            dda = dda_entry.get()
+            uid = uid_entry.get()
+            seq = int(seq_entry.get())
+            follow_q_values = [float(q.strip()) for q in follow_q_entry.split(",")]
+
+            eq = pr.Eq(pulse=pulse, dda=dda, uid=uid, seq=seq)
+
+            for follow_q in follow_q_values:
+                q_value = follow_q
+                q_loc = []
+                for t, q in enumerate(eq.Q()):
+                    cross_indices = np.where(np.diff(np.sign(q - q_value)))[0]
+                    if len(cross_indices) > 0:
+                        locs = []
+                        for ind in cross_indices:
+                            x = [eq.rntf[t, ind], eq.rntf[t, ind + 1]]
+                            y = [q[ind], q[ind + 1]]
+                            f = sc.interpolate.interp1d(y, x)
+                            locs.append(f(q_value))
+                        q_loc.append(np.mean(locs))
+                    else:
+                        q_loc.append(None)
+
+                # Plot the q value evolution
+                ax.plot(eq.t, q_loc, label=f"Pulse {pulse}/{dda}/{uid}/{seq}, q={q_value}")
+
+        ax.set_xlabel('Time')
+        ax.set_ylabel('X')
+        ax.set_title("Follow q Value")
+        legend = ax.legend()
+
+        # Make the legend draggable
+        legend.set_draggable(True)
+        plt.show()
+
 
 root = tk.Tk()
 gui = QProfileGUI(root)

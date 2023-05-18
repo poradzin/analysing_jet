@@ -338,6 +338,7 @@ class Eq():
         self._seq = seq
         self._init_data()
 
+
     def get_dat(self,dtype, kwargs={}):
         return ppf.ppfdata(self._pulse, self._dda,dtype,uid=self._uid,seq=self._seq,**kwargs)
 
@@ -345,7 +346,7 @@ class Eq():
         self._Q, self._x, self._t, *_, ier = self.get_dat('Q')
         #*_, ier = get_dat('Q')
         if ier != 0:  # Check PPF status
-            raise DataNotFoundError('Error initialising equlibrium PPF routines. Aborting.')
+            raise IOError('Error initialising equlibrium PPF routines.')
         self._Rmag, *_ = self.get_dat('RMAG')
         self._Zmag, *_ = self.get_dat('ZMAG')
         self._cr0, *_  = self.get_dat('CR0')
