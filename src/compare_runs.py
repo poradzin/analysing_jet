@@ -101,18 +101,21 @@ def cornernote(axis):
 if __name__=="__main__":
     pulse=int(sys.argv[1])
 
-    signal='PRAD'
-    times=[8.1,8.2]
-    xpos=[0.6]
+    signal='BDENS'
+    signal2='BDENS_D'
+    times=[6.0,7.0]
+    xpos=[0.1]
 
     p={}
     for run in sys.argv[2:]:
         p[run]=ps.Transp(pulse,str(run))
         p[run].add_data(signal)
+        p[run].add_data(signal2)
 
     win=pw.plotWindow()
     for t in times: 
         plot_profile(signal,t)
+        plot_profile(signal2,t)
     for x in xpos:
         plot_time_trace(signal,x)
     win.show()

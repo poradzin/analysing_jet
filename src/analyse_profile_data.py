@@ -344,7 +344,7 @@ def check_CX(pulse, plot=False,verbose=0,checkHCD=False):
     #print('Namespace: ', __name__)
     data=[['HRTS','NE','jetppf',0,'m^-3'],['HRTS','TE','jetppf',0,'eV'],
           #['KK3','TE02','jetppf',0,'eV'],
-          ['CXG6','TIFS','jetppf',0,'eV'],['CXD6','TIFS','jetppf',0,'eV'],
+          #['CXG6','TIFS','jetppf',0,'eV'],['CXD6','TIFS','jetppf',0,'eV'],
           #['CXG6','TICR','cxsbatch',0,'eV'],['CXD6','TICR','cxsbatch',0,'eV'],
           #['CXG6','TI','jetppf',0,'eV'],['CXD6','TI','jetppf',0,'eV'],
           #['CX7C','TI','jetppf',0,'eV'],['CX7D','TI','jetppf',0,'eV']
@@ -432,7 +432,7 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 99776
+    pulse = 101431
     
     plot=True
 
@@ -442,8 +442,8 @@ if __name__=='__main__':
         
     check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
     
-    ne_tstart= 46.3
-    ne_tend =  51.223
+    ne_tstart= 49.970
+    ne_tend =  55.528
 
     #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','TE','JETPPF',0,ne_tstart,ne_tend,plot=True)
