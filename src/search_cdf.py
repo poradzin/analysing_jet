@@ -25,7 +25,7 @@ def search_transp(search_string, file_path=None):
 
         # Print the matching keys, descriptions, units and dimensions
         if found_items:
-            print(f"Matching items for '{search_string}':")
+            print(f"Matching items for '{search_string}':\n")
             for item in found_items:
                 print(f"Key: {item[0]}\nUnits: {item[1]}\nDescription: {item[2]}\nDimensions: {item[3]}\n")
         else:
@@ -36,7 +36,7 @@ def search_transp(search_string, file_path=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Search within NetCDF files')
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--transp', metavar='runID', help='The run ID to search in the default path')
+    group.add_argument('--transp', metavar='runID', help='TRANSP run ID to search in the default path')
     group.add_argument('--file', metavar='filepath', help='The file path to search')
 
     args = parser.parse_args()
