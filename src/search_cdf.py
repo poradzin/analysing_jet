@@ -36,7 +36,7 @@ def search_transp(search_string, file_path=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Search within NetCDF files')
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('--transp', metavar='runID', help='TRANSP run ID to search in the default path')
+    group.add_argument('--transp', metavar='runID', help="TRANSP run ID to search in the default path. Example: '--transp 99972V01'")
     group.add_argument('--file', metavar='filepath', help='The file path to search')
 
     args = parser.parse_args()
