@@ -1,3 +1,4 @@
+#/usr/bin/env python
 # -*-Python-*-
 # Created by buchanj at 28 Nov 2016  15:06
 
@@ -44,6 +45,8 @@ signals = {
     'TAUEA': 'TEA',
     'TAUEE': 'TEE',
     'TAUES': 'TES',
+    'TAUPHI':'TAM',
+    'CHPHI': 'CHM',
     'TAUA1': 'TE1',
     'EHEAT': 'EPOW',
     'IHEAT': 'IPOW',
@@ -51,6 +54,7 @@ signals = {
     'UFASTPP': 'UFPP',
     'UFASTPA': 'UFPA',
     'UTHRM' : 'UTH',
+    'V': 'VLP',
 }
 
 conversions = {
@@ -66,12 +70,15 @@ conversions = {
     'TAUEE': 1.0,
     'TAUES': 1.0,
     'TAUA1': 1.0,
+    'TAUPHI':1.0,
+    'CHPHI':1.0e-4,
     'EHEAT': 1.0e6,
     'IHEAT': 1.0e6,
     'PRAD' : 1.0e6,
     'UFASTPP': 1.0e6,
     'UFASTPA': 1.0e6,
     'UTHRM' :  1.0e6,
+    'V':1.0,
 }
 
 newunits = {
@@ -81,18 +88,21 @@ newunits = {
     'CONDE': 'm**2/s',
     'CONDI': 'm**2/s',
     'CONDEF': 'm**2/s',
+    'CHPHI': 'm**2/s',
     'NEUTT': 'W',
     'OMEGDATA':'rad/sec',
     'TAUEA': 's',
     'TAUEE': 's',
     'TAUES': 's',
     'TAUA1': 's',
+    'TAUPHI': 's',
     'EHEAT': 'W*m**-3',
     'IHEAT': 'W*m**-3',
     'PRAD' : 'W*m**-3',
     'UFASTPP': 'W*m**-3',
     'UFASTPA': 'W*m**-3',
     'UTHRM' : 'W*m**-3',
+    'V': 'V'
 }
 
 # JETTO default list 2D signals from netCDF file
@@ -258,6 +268,7 @@ def convert_unit(data, unit_str):
         'rad/sec': ['rad/s', 1],
         'Tesla**2': ['T**2', 1],
         'V/CM': ['V/m', 100],
+        'V':['V',1],
         'N/CM3/SEC': ['N/m**3/s', 1e6],
         'WEBERS': ['Wb', 1],
         'V*s': ['Wb', 1],
@@ -806,7 +817,7 @@ def main(pulse,runid,DDAname, signals, conversions, newunits):
 
     # Check file exists in results directory
     if not os.path.isfile(cdfpath):
-
+        print(f'TRANSP CDF not found in {cdfpath}')
         # Is it a problem with the case
         cdfpath = f'{path}{pulse:d}{tr_seq.lower()}.cdf'
         if not os.path.isfile(cdfpath):
