@@ -46,7 +46,11 @@ if __name__ == '__main__':
     pulse_number = int(sys.argv[1])
     run_id = sys.argv[2]
 
-    search_string = input("Enter the string to search: ")
+    while True:
+        search_string = input("Enter the string to search (press Enter to exit): ")
+        if search_string:  # proceed only if the search string is not empty
+            search_transp(pulse_number, run_id,search_string)
+        else:
+            break    
 
-    search_transp(pulse_number, run_id, search_string)
 

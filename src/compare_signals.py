@@ -132,11 +132,12 @@ if __name__=="__main__":
     pulse=int(sys.argv[1])
     #signals1 = ['ETA_SP', 'ETA_SPS', 'ETA_WNC', 'ETA_TSC','ETA_USE']
     #signals2 = ['NUSTE','NUSTI']
-    signals1 = ['BDENS']
-    signals2 = ['UFASTPA']
+    signals1 = ['NE']
+    signals2 = ['TE']
+    sig3 = ['TI']
     #signals = [signals1, signals2]
-    signals = [signals1,signals2]
-    times1=[7.1,7.15,7.2,7.25,7.285,7.295]
+    signals = [signals1,signals2,sig3]
+    times1=[9.2]
     times = [times1]
     xpos=[0.99]
 

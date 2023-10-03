@@ -436,10 +436,11 @@ class QProfileGUI:
 
                     # Plot the q value evolution for TRANSP pulses
                     color = color_map(q_value)
-                    ax.plot(transp.t + 40., q_loc, label=f"Pulse {pulse}/{runid}, q={q_value}",color=color)
+                    ax.plot(transp.t + 40., q_loc, label=f"{pulse}/{runid}, q={q_value}",color=color)
 
         ax.set_xlabel('Time')
         ax.set_ylabel('X')
+        ax.set_ylim(bottom=0.,top=1.0)
         ax.set_title("Follow q Value")
 
         # Create color bar
@@ -485,10 +486,11 @@ class QProfileGUI:
                         q_loc.append(None)
 
                 # Plot the q value evolution
-                ax.plot(eq.t, q_loc, label=f"Pulse {pulse}/{dda}/{uid}/{seq}, q={q_value}")
+                ax.plot(eq.t, q_loc, label=f"{pulse}/{dda}/{uid}/{seq}, q={q_value}")
 
         ax.set_xlabel('Time')
         ax.set_ylabel('X')
+        ax.set_ylimits(bottom=0.0, top=1.0)
         ax.set_title("Follow q Value")
         legend = ax.legend()
 

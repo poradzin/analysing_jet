@@ -432,7 +432,7 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 101431
+    pulse = 100854
     
     plot=True
 
@@ -440,19 +440,23 @@ if __name__=='__main__':
 
     print(f'PULSE {pulse}\n')
         
-    check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
+    #check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
     
-    ne_tstart= 49.970
-    ne_tend =  55.528
+    ne_tstart= 47.0234
+    ne_tend =  54.5273
 
-    #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    (t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','TE','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'KK3','TE21','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'CXD6','TIFS','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CXD6','TI','cxsbatch',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CXG6','TI','cxsbatch',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'CXG6','TIFS','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'CXD6','AFCR','jetppf',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'CXG6','AFCR','jetppf',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'CX7C','TI','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CX7D','TI','JETPPF',0,ne_tstart,ne_tend,plot=True)
+    #(t,x,data) = get_no_slices_and_plot(pulse,'CX7D','TI','JETPPF',0,ne_tstart,ne_tend,plot=True)
 # tests of class plotWindow
     def fun(f,x):
         return f(x)

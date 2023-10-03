@@ -17,11 +17,10 @@ class Transp():
         self._cdfloc = f'/common/transp_shared/Data/result/JET/{pulse}/{runid}/{pulse}{runid}.CDF'
         self._dat = Dataset(self._cdfloc)
         self._dat_list=[item for item in self._dat.variables.keys()]
-        get = lambda key: np.array(self._dat.variables[key])
-        self._x = get("X")
-        self._t = get("TIME3")
+        self._x = self.get("X")
+        self._t = self.get("TIME3")
         self._dt = np.concatenate(([(self._t[1] - self._t[0])/2], (self._t[2:] - self._t[:-2])/2, [(self._t[-1] - self._t[-2])]))
-        self._dvol = get('DVOL')
+        self._dvol = self.get('DVOL')
         self._transp = {}
         self._units = {}
         self._long_name = {}
@@ -54,7 +53,8 @@ class Transp():
     @property
     def dt(self):
         return self._dt
-
+    def get(self, key):
+        return np.array(self._dat.variables[key])
     def transp(self,signal):
         if signal in self._transp.keys():
             return self._transp[signal]
