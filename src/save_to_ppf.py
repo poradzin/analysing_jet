@@ -26,12 +26,18 @@ signals_to_int = {
     'EHEAT': 'EPIN',
     'IHEAT': 'IPIN',
     'PRAD'  : 'PRIN',
+    'EPTR_OBS': 'EPFL',
+    'EETR_OBS': 'EEFL',
+    'IETR_OBS': 'IEFL'
 }
 
 units_to_int = {
     'EHEAT': 'W',
     'IHEAT' : 'W',
     'PRAD':'W',
+    'EPTR_OBS': 'W',                                                                             
+    'EETR_OBS': 'W',                                                                             
+    'IETR_OBS': 'W' 
 }
 # List of additional signals requested
 signals = {
@@ -678,8 +684,8 @@ def cum_int(pulse, rootgrp, signals_2D):
         [nt, nx] = size
         dunits = rootgrp.variables[key].units.strip()  # Data units
         if '/CM3' in dunits:
-            dunits = dunits[:-4]
-
+            dunits = dunits.replace('/CM3','')
+           
         tunits, xunits = '', ''
         txunits = [tunits, xunits]
         for i, var in enumerate(rootgrp.variables[key].dimensions):
