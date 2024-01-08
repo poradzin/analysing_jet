@@ -277,7 +277,12 @@ class Neutrons(Densities):
             self._wiesen = self._ntnd/(dt_rate_wiesen/dd_rate_wiesen)
 
         return None
-    
+
+    def total(self,sig):
+        dt = self.t[1:]-self.t[:-1]
+        f = (self.transp(sig)[1:]+self.transp(sig)[:-1])/2.
+        return np.dot(f,dt)
+
     def get_exp(self):
         PPFseq = 0
         user = 'JETPPF'
@@ -300,7 +305,14 @@ class Neutrons(Densities):
         self._RNT_on_R14 = frnt(self._R14_time)
         return None
         #return (self._NEUT_Time,self._NEUT, self._R14_time, self._R14 )
-        
+
+    def tot_exp(self):
+        if self._RNT is None: 
+            print('No RNT data present')
+            return None
+        dt = self._RNT_time[1:]-self._RNT_time[:-1] 
+        f = (self._RNT[1:]+self._RNT[:-1])/2. 
+        return np.dot(f,dt)
 
 class EXP():
     def __init__(self,pulse,runid):

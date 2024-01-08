@@ -13,7 +13,8 @@ neutrons.get_transp_neutrons()
 neutrons.get_exp()
 
 print(f'Times from {neutrons.t[0]:.3f}s to {neutrons.t[-1]:.3f}s.')
-
+print(f"Total TRANSP neutrons: {neutrons.total('NEUTT')}")
+print(f"Total TIN/RNT neutrons: {neutrons.tot_exp()}")  
 def cornernote(axis):                                                                           
     fontsize=9
     text = neutrons.transpcid
@@ -35,7 +36,7 @@ fig = plt.figure()
 fig.suptitle(f'Thermal vs. beam', fontsize=13) 
 ax = fig.add_subplot(111)
 
-ax.plot(rnt_time,rnt,color='r',linewidth=2,label='TIN/RNT')
+ax.plot(rnt_time,rnt,color='r',linewidth=2,label='Measured')
 ax.fill_between(rnt_time, 
         (1 - rnt_unc) * rnt, 
         (1 + rnt_unc) * rnt, 
