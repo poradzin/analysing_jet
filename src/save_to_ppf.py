@@ -20,7 +20,7 @@ import numpy as np
 DDAname = 'TRAU'
 
 
-# Integrated signals to be saved
+# Signals to be integrated and saved
 
 signals_to_int = {
     'EHEAT': 'EPIN',
@@ -61,6 +61,9 @@ signals = {
     'UFASTPA': 'UFPA',
     'UTHRM' : 'UTH',
     'V': 'VLP',
+    'ND':'ND',
+    'NH':'NH',
+    'NT':'NT',
 }
 
 conversions = {
@@ -85,6 +88,9 @@ conversions = {
     'UFASTPA': 1.0e6,
     'UTHRM' :  1.0e6,
     'V':1.0,
+    'ND':1.0e6,
+    'NT':1.0e6, 
+    'NH':1.0e6, 
 }
 
 newunits = {
@@ -108,7 +114,10 @@ newunits = {
     'UFASTPP': 'W*m**-3',
     'UFASTPA': 'W*m**-3',
     'UTHRM' : 'W*m**-3',
-    'V': 'V'
+    'V': 'V',
+    'ND': 'm**-3',
+    'NH': 'm**-3',
+    'NT': 'm**-3',
 }
 
 # JETTO default list 2D signals from netCDF file
@@ -314,96 +323,6 @@ def convert_unit(data, unit_str):
         '': ['',1]
     }
     return (data*conversion_dict[unit_str][1], conversion_dict[unit_str][0])
-def add_signal_to_cdf(rootgrp, data, new_key, time_key, x_key, units, long_name):
-    """
-    Adds a new signal to a netcdf file.
-
-    Parameters:
-    -----------
-    rootgrp: netCDF4.Dataset object
-        The netcdf4 file object.
-    data: ndarray
-        A numpy array containing the signal data to be added.
-    new_key: str
-        The name of the new signal to be added.
-    time_key: str
-        The name of the time dimension variable.
-    x_key: str
-        The name of the x dimension variable.
-    units: str
-        The units of the signal data.
-    long_name: str
-        The long name of the signal data.
-
-    Returns:
-    --------
-    None
-    """
-    outfname = "temp.nc"
-    print(f"rootgrp TIME: {rootgrp.variables['TIME']}")
-    # with rootgrp as src:                 
-                                                      
-    #     with Dataset(outfname, "w", format=src.file_format) as dst:
-    #         # copy global attributes all at once via dictionary
-    #         dst.setncatts(src.__dict__)                   
-    #         # copy dimensions                             
-    #         for name, dimension in src.dimensions.items():
-    #             dst.createDimension(                      
-    #                 name, (len(dimension) if not dimension.isunlimited() else None))
-    #         # copy all file data except for the excluded  
-    #         for name, variable in src.variables.items():
-    #                 createattrs = variable.filters()      
-    #                 if createattrs is None:               
-    #                     createattrs = {}                  
-    #                 else:                                 
-    #                     chunksizes = variable.chunking()  
-    #                     print(createattrs)                
-    #                     if chunksizes == "contiguous":    
-    #                         createattrs["contiguous"] = True
-    #                     else:                             
-    #                         createattrs["chunksizes"] =  chunksizes
-    #                 x = dst.createVariable(name, variable.datatype, variable.dimensions, **createattrs)
-    #                 # copy variable attributes all at once via dictionary
-    #                 dst[name].setncatts(src[name].__dict__)
-    #                 dst[name][:] = src[name][:]
-            
-    # Create a new in-memory netCDF4 dataset
-    #new_rootgrp = Dataset("temp.nc", "w", format="NETCDF4")
-
-    # Add dimensions to the new dataset
-    #new_rootgrp.createDimension(time_key, data.shape[0])
-    #new_rootgrp.createDimension(x_key, data.shape[1])
-
-    # Copy variables from the original dataset to the new one
-    # for varname, ncvar in rootgrp.variables.items():
-    #     # Create a new variable in the new dataset
-    #     #if varname is 'TIME':
-    #     #print(f'varname: {varname}. ncvar dimension: {ncvar}')
-    #     new_var = new_rootgrp.createVariable(varname, ncvar.dtype, ncvar.dimensions)
-    #     # Copy data from the original variable to the new one
-    #     new_var[:] = ncvar[:]
-    #     # Copy attributes from the original variable to the new one
-    #     for attrname in ncvar.ncattrs():
-    #         new_var.setncattr(attrname, ncvar.getncattr(attrname))
-
-    # Add the new signal to the new dataset
-    #signal_var = new_rootgrp.createVariable(new_key, 'f', (time_key, x_key))
-    #signal_var.units = units
-    #signal_var.long_name = long_name
-    #signal_var[:, :] = data
-
-    # Close the new dataset
-    #new_rootgrp.close()
-
-    # Read the new dataset into memory and delete the temporary file
-    #with open("temp.nc", "rb") as f:
-    #    new_data = f.read()
-    #os.remove("temp.nc")
-
-    # Append the new signal data to the original dataset
-    #rootgrp.write(new_data, end=len(rootgrp))
-
-
 
 
 def linear_composite(rootgrp, new_signal, signals):
@@ -618,9 +537,6 @@ def add_composite_signal(pulse, rootgrp,new_signal, composite, integrate=False):
         print(f'{new_signal} integration along X')  
         dvol = rootgrp.variables['DVOL'][:]
         dvol_units = rootgrp.variables['DVOL'].units.strip() 
-        #print(f'dvol_units: {dvol_units}')
-        #test, dvol_units = convert_unit(1,dvol_units)
-        #print(f'dvol_units: {dvol_units}')
         dvol, dvol_units = convert_unit(dvol,dvol_units)
         # upper triangle array with ones
         upper = np.triu(np.ones((nx,nx)))
@@ -857,10 +773,7 @@ def main(pulse,runid,DDAname, signals, conversions, newunits):
     #user = MainSettings['SERVER']['CCFE_username']
     user = getpass.getuser()
     user_len = len(user)
-    #if user_len < 1:
-    #    OMFITx.End()
 
-    #cum_int(pulse, rootgrp, signals_to_int)
     #Set user ID
 
 
@@ -895,8 +808,6 @@ def main(pulse,runid,DDAname, signals, conversions, newunits):
 
 if __name__ =='__main__':
     
-    #for idx, arg in enumerate(sys.argv):
-    #    print(f'Argument #{idx} is {arg}. type: {type(arg)}')
     transpcid=''.join(sys.argv[1:])
     pulse=int(transpcid[:-3])
     runid = transpcid
