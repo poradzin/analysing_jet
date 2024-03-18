@@ -315,10 +315,10 @@ class Neutrons(Densities):
         return np.dot(f,dt)
 
 class EXP():
-    def __init__(self,pulse,runid):
+    def __init__(self,pulse,runid,dda='KT5P'):
         self._pulse = pulse
         self._runid = runid
-        self._dda = 'KT5P'
+        self._dda = dda
         self._seq = 0
         self._ierr=ppf.ppfgo(pulse=self._pulse,seq=self._seq)
         ppf.ppfsetdevice("JET")

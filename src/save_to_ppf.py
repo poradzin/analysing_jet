@@ -64,8 +64,24 @@ signals = {
     'ND':'ND',
     'NH':'NH',
     'NT':'NT',
-}
-
+    'NEUTT': 'TOTN',
+    'NEUTX': 'THNT',
+    'NEUTX_DD': 'THDD',
+    'NEUTX_DT': 'THDT',
+    'NEUTX_TT': 'THTT', 
+    'BTBTS': 'BTNT',
+    'BTNTS_DD': 'BTDD', 
+    'BTNTS_DT': 'BTDT', 
+    'BTNTS_TD': 'BTTD', 
+    'BTNTS_TT': 'BTTT',
+    'BBBTS': 'BBNT',
+    'BBNTS_DD': 'BBDD', 
+    'BBNTS_DT': 'BBDT', 
+    'BBNTS_TD': 'BBTD', 
+    'BBNTS_TT': 'BBTT',
+    'DVOL': 'DVOL',
+    }
+    
 conversions = {
     'BZXR': 1.0e-3,
     'RMNMP': 1.0e-2,
@@ -91,6 +107,22 @@ conversions = {
     'ND':1.0e6,
     'NT':1.0e6, 
     'NH':1.0e6, 
+    'NEUTT': 1.0,
+    'NEUTX': 1.0,
+    'NEUTX_DD': 1.0,
+    'NEUTX_DT': 1.0,
+    'NEUTX_TT': 1.0, 
+    'BTBTS': 1.0,
+    'BTNTS_DD': 1.0, 
+    'BTNTS_DT': 1.0, 
+    'BTNTS_TD': 1.0, 
+    'BTNTS_TT': 1.0,
+    'BBBTS': 1.0,
+    'BBNTS_DD': 1.0, 
+    'BBNTS_DT': 1.0, 
+    'BBNTS_TD': 1.0, 
+    'BBNTS_TT': 1.0,
+    'DVOL': 1.0e-6
 }
 
 newunits = {
@@ -118,6 +150,22 @@ newunits = {
     'ND': 'm**-3',
     'NH': 'm**-3',
     'NT': 'm**-3',
+    'NEUTT': 'N/SEC',
+    'NEUTX': 'N/SEC',
+    'NEUTX_DD': 'N/SEC',
+    'NEUTX_DT': 'N/SEC',
+    'NEUTX_TT': 'N/SEC', 
+    'BTBTS': 'N/SEC',
+    'BTNTS_DD': 'N/SEC', 
+    'BTNTS_DT': 'N/SEC', 
+    'BTNTS_TD': 'N/SEC', 
+    'BTNTS_TT': 'N/SEC',
+    'BBBTS': 'N/SEC',
+    'BBNTS_DD': 'N/SEC', 
+    'BBNTS_DT': 'N/SEC', 
+    'BBNTS_TD': 'N/SEC', 
+    'BBNTS_TT': 'N/SEC',
+    'DVOL':'m**3'
 }
 
 # JETTO default list 2D signals from netCDF file
@@ -279,6 +327,7 @@ def convert_unit(data, unit_str):
     conversion_dict = {
         'N/CM**2': ['Pa', 10000],
         '/SEC': ['1/s', 1],
+        'N/SEC':['1/s',1],
         'Pascals': ['Pa', 1],
         'rad/sec': ['rad/s', 1],
         'Tesla**2': ['T**2', 1],
