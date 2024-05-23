@@ -164,7 +164,7 @@ def check_when_heating_active(pulse, plot=False,verbose=0,window=None):
 
         if len(value)>0:
             data[ind][3]=True
-            power_cut_off = -0.01
+            power_cut_off = 0.01
             above_cut_off = value>power_cut_off
             nonzerotimes = time[above_cut_off]
             times[dda] = nonzerotimes
@@ -432,7 +432,7 @@ if __name__=='__main__':
 
     #import plotWindow as pw
     
-    pulse = 99965
+    pulse = 99206
     
     plot=True
 
@@ -442,8 +442,8 @@ if __name__=='__main__':
         
     check_CX(pulse,checkHCD=True, plot=plot,verbose=verbose)
     
-    ne_tstart= 47.00
-    ne_tend =  53.43
+    ne_tstart= 45.973
+    ne_tend =  52.023
     
     #(t,x,data) = get_no_slices_and_plot(pulse,'HRTS','NE','JETPPF',0,ne_tstart,ne_tend,plot=True)
     #(t,x,data) = get_no_slices_and_plot(pulse,'LIDR','NE','JETPPF',131,ne_tstart,ne_tend,plot=True)

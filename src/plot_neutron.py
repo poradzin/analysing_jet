@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import plotWindow as pw
 import matplotlib.pyplot as plt
+import numpy as np
 import profiles as ps
 import sys
 
@@ -30,6 +31,7 @@ def cornernote(axis):
     return None
 rnt_time, rnt = neutrons.rnt
 rnt_unc = 0.1
+
 win=pw.plotWindow()
 
 fig = plt.figure() 
@@ -88,46 +90,61 @@ ax.set_title(f'{neutrons.transpcid} Thermal vs. beam-target neutrons')
 
 ax.plot(rnt_time,rnt,color='r',linewidth=2,label='TIN/RNT')
 #ax.plot(R14_time,R14,color='orange',linewidth=2,label='TIN/R14')
+
 ax.plot(neutrons.transp_time+40,
         neutrons.transp('NEUTT'),
         color='k',
         linewidth=2,
         label='Total'
         )
-ax.plot(neutrons.transp_time+40, 
-        neutrons.transp('NEUTX_DD'),
-        color='green',
-        linewidth=2, 
-        label='Thermal DD'
-        )
-ax.plot(neutrons.transp_time+40, 
-        neutrons.transp('BTNTS_DD'),
-        color='blue',
-        linewidth=2, 
-        label='Beam-target DD'
-        )
-ax.plot(neutrons.transp_time+40,
+
+if neutrons.transp('NEUTX_DD') is not None: 
+    ax.plot(neutrons.transp_time+40, 
+            neutrons.transp('NEUTX_DD'),
+            color='green',
+            linewidth=2, 
+            label='Thermal DD'
+            )
+if neutrons.transp('BTNTS_DD') is not None: 
+    ax.plot(neutrons.transp_time+40, 
+            neutrons.transp('BTNTS_DD'),
+            color='blue',
+            linewidth=2, 
+            label='Beam-target DD'
+            )
+#print(f"neutrons.transp_dt: {neutrons.transp_dt}")
+#print(f"neutrons.transp('EMUTX_DT'): {neutrons.transp('NEUTX_DT')}")
+#print(f"isinstance(neutrons.transp_dt, (list,np.ndarray)) : {isinstance(neutrons.transp_dt, (np.ndarray,list))}")
+#print(f"type(neutrons.transp_dt)): {type(neutrons.transp_dt)}") 
+if isinstance(neutrons.transp_dt, (list,np.ndarray)):
+    ax.plot(neutrons.transp_time+40,
         neutrons.transp_dt,
-        color='k',
-        linestyle= (0, (5, 1)),
-        linewidth=2,
-        label='Total DT'
-        )
-ax.plot(neutrons.transp_time+40, 
+	color='k',
+	linestyle= (0, (5, 1)),
+	linewidth=2,
+	label='Total DT'
+	)
+if isinstance(neutrons.transp('NEUTX_DT'), (list,np.ndarray)):
+    ax.plot(neutrons.transp_time+40, 
         neutrons.transp('NEUTX_DT'),
         color='green',
         linestyle= (0, (5, 1)),
         linewidth=2, 
         label='Thermal DT'
         )
-ax.plot(neutrons.transp_time+40, 
+#print(f"isinstance(neutrons.transp('BTNTS_DT'), list): {isinstance(neutrons.transp('BTNTS_DT'),list)}")
+#print(f"type(neutrons.transp('BTNTS_DT')): {type(neutrons.transp('BTNTS_DT'))}")
+if isinstance(neutrons.transp('BTNTS_DT'), (list,np.ndarray)):
+    print('BTNTS_DT went through')
+    ax.plot(neutrons.transp_time+40, 
         neutrons.transp('BTNTS_DT'),
         color='blue',
         linestyle = (0, (5, 1)),
         linewidth=2, 
         label='Beam-target DT'
         )
-if neutrons.signal('BTNTS_TD'):
+print(f"neutrons.signal('BTNTS_TD'):{neutrons.signal('BTNTS_TD')}")
+if isinstance(neutrons.signal('BTNTS_TD'),(list,np.ndarray)):
     ax.plot(neutrons.transp_time+40, 
         neutrons.transp('BTNTS_TD'),
         color='rebeccapurple',

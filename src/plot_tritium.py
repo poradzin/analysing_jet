@@ -10,11 +10,14 @@ runid=str(sys.argv[2])
 profs = ps.Neutrons(pulse, runid)                                                                
 profs.get_transp_neutrons()
 
-kt5p = ps.EXP(pulse,runid)
-print(f'len(kt5p.t):{len(kt5p.t)}')
-print(f'len(kt5p.tttd): {len(kt5p.tttd)}')
+#Ion_fraction_dda = 'KS3B'
+Ion_fraction_dda = 'KT5P'
+kt5p = ps.EXP(pulse,runid,dda=Ion_fraction_dda)
 #pulse averaged Wiesen coefficient
-ratio = np.average(profs.ntnd/profs.Rdtdd,weights=profs.dt)
+if all(profs.Rdtdd>0.0): 
+    ratio = np.average(profs.ntnd/profs.Rdtdd,weights=profs.dt)
+else: 
+    ratio = 0.0
 ratio_W = np.average(profs.wiesen,weights=profs.dt)
 
 Meff = np.average(profs.meff,weights=profs.dt)
@@ -56,11 +59,11 @@ if profs.signal('NT'):
             color='olive',
             linewidth=2,
             linestyle=(0,(1,1)),
-            label='KT5P/TTTD',
+            label=f'{Ion_fraction_dda}/TTTD',
             )
 if profs.signal('ND'):
     ax.plot(profs.t+40.,profs.dthd*100, color='b',linewidth=2,label='nd/(nt+nd+nh)')
-    ax.plot(kt5p.t,kt5p.dthd*100, color='darkorange',linestyle=(0,(1,1)), label='KT5P/DTHD')
+    ax.plot(kt5p.t,kt5p.dthd*100, color='darkorange',linestyle=(0,(1,1)), label=f'{Ion_fraction_dda}/DTHD')
 
 ax.plot(profs.t+40.,profs.ntne*100, color='r',linewidth=2,label='nt/ne',linestyle='dashed')
 ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
@@ -89,23 +92,25 @@ text = (
        )                                                                                              
                                                                                                
 ax.set_title(f'{profs.transpcid} Neutron rates vs T density')                                  
-                                                                                               
-ax.plot(profs.t+40.,
-        profs.ntnd/profs.Rdtdd, 
-        color='k',
-        linewidth=2,
-        label=r'$(nt/nd)/R_{DT/DD}$'
-        )                                                                                      
-ax.plot([profs.t[0]+40.,profs.t[-1]+40.],
-        [ratio,ratio],
-        linestyle='dashed',
-        color='darkred',
-        linewidth=2,
-        label= 'average'
-        )                                                                                      
-                                                                                               
-ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)                                                      
-ax.set_ylim(0.5*np.amin(profs.ntnd/profs.Rdtdd), 1.5*np.amax(profs.ntnd/profs.Rdtdd))          
+if any(profs.Rdtdd>0):                                                                                               
+    ax.plot(profs.t+40.,
+            profs.ntnd/profs.Rdtdd, 
+            color='k',
+            linewidth=2,
+            label=r'$(nt/nd)/R_{DT/DD}$'
+            )
+if ratio>0: 
+    ax.plot([profs.t[0]+40.,profs.t[-1]+40.],
+            [ratio,ratio],
+            linestyle='dashed',
+            color='darkred',
+            linewidth=2,
+            label= 'average'
+            )                                                                                      
+                                                                                                   
+ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
+if any(profs.Rdtdd>0):
+    ax.set_ylim(0.5*np.amin(profs.ntnd/profs.Rdtdd), 1.5*np.amax(profs.ntnd/profs.Rdtdd))          
 xleft,xright = ax.get_xlim()                                                                   
 ymin,ymax=ax.get_ylim()                                                                        
 ax.set_xlabel('Time [s]')                                                                      
@@ -145,8 +150,9 @@ ax.plot([profs.t[0]+40.,profs.t[-1]+40.],
         label= 'average'
         )
                                                             
-ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)                                 
-ax.set_ylim(0.5*np.amin(profs.Rdtdd), 1.5*np.amax(profs.Rdtdd))
+ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
+if all(profs.Rdtdd>0):
+    ax.set_ylim(0.5*np.amin(profs.Rdtdd), 1.5*np.amax(profs.Rdtdd))
 xleft,xright = ax.get_xlim()
 ymin,ymax=ax.get_ylim()
 ax.set_xlabel('Time [s]')

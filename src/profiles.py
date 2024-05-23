@@ -4,17 +4,61 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import interp1d 
 import sys
+import os
 import plotWindow as pw
+
 
 def gi(x,y):
     return (np.abs(x - y)).argmin()
+class Fun():
+    @staticmethod
+    def check_if_all_in_list(keys,list_keys):
+        onebyone = [key in list_keys for key in keys]
+        return len(onebyone)==sum(onebyone) 
+
+    def there_is_zero(x):
+        if isinstance(x, (float,int)):
+            if x == 0.0:
+                return True
+        elif isinstance(x, np.ndarray):
+            if np.any(x == 0.0):
+                return True
+        else: 
+            return False
 
 class Transp():
     def __init__(self,pulse,runid):
         self._pulse = pulse
         self._runid = runid
         self._transpcid = str(pulse)+str(runid)
-        self._cdfloc = f'/common/transp_shared/Data/result/JET/{pulse}/{runid}/{pulse}{runid}.CDF'
+
+        tr_seq = runid.replace(str(pulse), '') 
+        # Construct path to results directory for this run                                              
+        path = f"/common/transp_shared/Data/result/JET/{pulse:d}/{tr_seq.upper()}/"
+        # Initial CDF file path
+        cdfpath = f'/common/transp_shared/Data/result/JET/{pulse}/{runid}/{pulse}{runid}.CDF'
+
+        # Check if the file exists
+        if not os.path.isfile(cdfpath):
+            # Check the alternate case in results directory
+            cdfpath = f'{path}{pulse:d}{tr_seq.lower()}.cdf'
+            if not os.path.isfile(cdfpath):
+                # Check in warehouse directory
+                whshot = f'{pulse:07d}'
+                whousedir = f'/common/transp_shared/Data/whouse/JET/{whshot[0:4]}___/{whshot}/{tr_seq.lower()}'
+                cdfpath = f'{whousedir}/{whshot}{tr_seq.lower()}.cdf'
+                if not os.path.isfile(cdfpath):
+                    print("CDF file not found.")
+                    return
+                else:
+                    print('Using netCDF file found in warehouse directory.\n')
+            else:
+                print('Using netCDF file found in results directory.\n')
+        else:
+            print('Using netCDF file found in results directory.\n')
+
+        self._cdfloc = cdfpath
+        #self._cdfloc = f'/common/transp_shared/Data/result/JET/{pulse}/{runid}/{pulse}{runid}.CDF'
         self._dat = Dataset(self._cdfloc)
         self._dat_list=[item for item in self._dat.variables.keys()]
         self._x = self.get("X")
@@ -180,12 +224,15 @@ class Densities(Transp):
             self._tttd_av = np.average(self._tttd,weights=self._dt)
             self._ntne = prof_int['NT']/prof_int['NE'] 
             self._ntne_av = np.average(self._ntne,weights=self._dt)
-        
-        if 'NT' and 'ND' in self._dat_list:
+        if 'ND' in self._dat_list: 
+            self._dthd = prof_int['ND']/th_ion_density
+
+        if Fun.check_if_all_in_list(['NT','ND'],self._dat_list):
             self._ntnd = prof_int['NT']/prof_int['ND']
             self._ntnd_av = np.average(self._ntnd,weights=self._dt)
-            self._dthd = prof_int['ND']/th_ion_density 
-
+        else:
+            self._ntnd = np.zeros(len(self._t))
+            self._ntnd_av = np.average(self._ntnd,weights=self._dt) 
         return None
 
 
@@ -203,23 +250,27 @@ class Neutrons(Densities):
     @property
     def beam_dt(self):
         signals = ('BTNTS_DT','BBNTS_DT')
-        return sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        res = sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        return res
     @property                                                                           
     def beam_dd(self):                                                                  
         signals = ('BTNTS_DD','BBNTS_DD')                                               
-        return sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
-
+        res = sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        return res
     @property
     def beam_td(self):
         signals = ('BTNTS_TD','BBNTS_TD')
-        return sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        res = sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        return res
     @property
     def beam_tt(self):                                                                
         signals = ('BTNTS_TT','BBNTS_TT')                                    
-        return sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        res = sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        return res
     def thermal_dt(self):                                                                   
         signals = ('NEUTX_TT','NEUTX_DT')                                     
-        return sum(self.transp(sig) for sig in signals if sig in self._transp.keys()) 
+        res = sum(self.transp(sig) for sig in signals if sig in self._transp.keys()) 
+        return res
 
     @property
     def transp_dd(self):
@@ -228,11 +279,13 @@ class Neutrons(Densities):
     @property
     def transp_dt(self):
         signals = ('NEUTX_DT','BTNTS_DT','BTNTS_TD','BBNTS_DT')
-        return sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        res = sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        return res
     @property
     def transp_tt(self):
         signals = ('NEUTX_TT','BTNTS_TT','BBNTS_TT')
-        return sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        res = sum(self.transp(sig) for sig in signals if sig in self._transp.keys())
+        return res
     @property
     def Rdtdd(self):
         return self._Rdtdd
@@ -266,15 +319,28 @@ class Neutrons(Densities):
         dd_rate = sum(self.transp(sig) for sig in dd_signals if sig in self._transp.keys())
         dt_rate = sum(self.transp(sig) for sig in dt_signals if sig in self._transp.keys())
 
-        if 'NEUTX_DD' and 'BTNTS_DD' in self._transp.keys():
+        if Fun.check_if_all_in_list(['NEUTX_DD','BTNTS_DD','BBNTS_DD'],self._transp.keys()):
             dd_rate_wiesen = self.transp('NEUTX_DD')+ self.transp('BTNTS_DD')+self.transp('BBNTS_DD')
-        if 'NEUTX_DT' and 'BTNTS_DT' in self._transp.keys(): 
-            dt_rate_wiesen = self.transp('NEUTX_DT')+self.transp('BTNTS_DT')        
+        else: 
+            dd_rate_wiesen = np.zeros(len(self._t))
+        if Fun.check_if_all_in_list(['NEUTX_DT','BTNTS_DT'],self._transp.keys()): 
+            dt_rate_wiesen = self.transp('NEUTX_DT')+self.transp('BTNTS_DT')
+        else:                                                                                       
+            dt_rate_wiesen = np.zeros(len(self._t))
 
-        self._Rdtdd = dt_rate/dd_rate
+        if Fun.there_is_zero(dd_rate):
+            self._Rdtdd = np.zeros(len(self._t))
+        else: 
+            self._Rdtdd = dt_rate/dd_rate
         self._Rdtdd_av = np.average(self._Rdtdd,weights=self._dt)
-        if 'NEUTX_DD' and 'NEUTX_DT' in self._transp.keys(): 
-            self._wiesen = self._ntnd/(dt_rate_wiesen/dd_rate_wiesen)
+
+        if Fun.check_if_all_in_list(['NEUTX_DD','NEUTX_DT'],self._transp.keys()):
+            if all(dd_rate_wiesen>0) and all(dt_rate_wiesen>0):
+                self._wiesen = self._ntnd/(dt_rate_wiesen/dd_rate_wiesen)
+            else: 
+                self._wiesen = np.zeros(len(self._t))
+        else: 
+            self._wiesen = np.zeros(len(self._t))
 
         return None
 
@@ -290,19 +356,23 @@ class Neutrons(Densities):
         ier = ppf.ppfgo(self._pulse, PPFseq)
         #print(f'ier = {ier},user: {user}')
         if ier != 0:
-            raise OMFITexception(f'ier = {ier}. Error initialising PPF routines. Aborting.')
+            raise Exception(f'ier = {ier}. Error initialising PPF routines. Aborting.')
         # Set User ID for reading
         ier = ppf.ppfuid(user, rw="R")
         self._RNT = ppf.ppfdata(self._pulse, 'TIN', 'RNT')[0]
         self._RNT_time = ppf.ppfdata(self._pulse, 'TIN', 'RNT')[2]        
-        self._R14 = ppf.ppfdata(self._pulse, 'TIN', 'R14')[0]
-        self._R14_time = ppf.ppfdata(self._pulse, 'TIN', 'R14')[2]
+        self._R14,_,self._R14_time,*__,ier_14 = ppf.ppfdata(self._pulse, 'TIN', 'R14')
+        #self._R14_time = ppf.ppfdata(self._pulse, 'TIN', 'R14')[2]
         # interpolate R14 onto RNT
-        fr14 = interp1d(self._R14_time,self._R14)
-        frnt = interp1d(self._RNT_time,self._RNT)
 
+        frnt = interp1d(self._RNT_time,self._RNT)
         self._RNT_on_transp = frnt(self._t+40.)
-        self._RNT_on_R14 = frnt(self._R14_time)
+        if ier_14==0: 
+            fr14 = interp1d(self._R14_time,self._R14)
+            self._RNT_on_R14 = frnt(self._R14_time)
+        else: 
+            # if no R14 data then stay on RNT time vector
+            self._RNT_on_R14 = self._RNT
         return None
         #return (self._NEUT_Time,self._NEUT, self._R14_time, self._R14 )
 

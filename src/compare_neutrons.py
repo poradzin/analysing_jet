@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import profiles as ps
 import sys
 import numpy as np
+import argparse
 
 def getind(val,data):
     return np.argmin(np.abs(data-val))
@@ -86,59 +87,96 @@ def cornernote(axis,text):
 
 ############################################################
 
-gi = getind
-pulse=int(sys.argv[1])
-p={}
-runs = sys.argv[2:]
+# Function to parse command line arguments
+def parse_arguments():
+    parser = argparse.ArgumentParser(description='Description of your program')
+    parser.add_argument('pulse', type=int, help='Description of pulse argument')
+    parser.add_argument('--label', nargs='+', help='List of labels for runs')
+    parser.add_argument('--color',nargs='+', help='List of colors for runs')
+    parser.add_argument('--linestyle',nargs='+', help='List of linestyles for runs')
+    parser.add_argument('runs', nargs='+', help='List of runs')
+    return parser.parse_args()
 
+args = parse_arguments()
+
+pulse = args.pulse
+runs = args.runs
+
+# Check if the number of labels and colors provided matches the number of runs
+if args.label and len(args.label) != len(runs):
+    print("Error: Number of labels provided does not match the number of TRASP runs.")
+    sys.exit(1)
+if args.color and len(args.color) != len(runs):
+    print("Error: Number of colors provided does not match the number of TRANSP runs.")
+    sys.exit(1)
+if args.linestyle and len(args.linestyle) != len(runs):
+    print("Error: Number of linestyles provided does not match the number of TRANSP runs.")
+    sys.exit(1)
+
+if args.linestyle:
+    print('TUTAU')
+# Convert linestyle strings or tuples to appropriate format
+linestyles = []
+if args.linestyle:
+    for style in args.linestyle:
+        # Check if the style is a tuple
+        if style.startswith('(') and style.endswith(')'):
+            try:
+                linestyle_tuple = eval(style)  # Safely evaluate the tuple
+                linestyles.append(linestyle_tuple)
+            except SyntaxError:
+                print(f"Error: Invalid linestyle tuple '{style}'.")
+                sys.exit(1)
+        else:
+            linestyles.append(style)  # Otherwise, assume it's a string
+
+
+p = {}
 for run in runs:
-    p[run]=ps.Neutrons(pulse,str(run))
+    p[run] = ps.Neutrons(pulse, str(run))
     p[run].get_transp_neutrons()
 
 p[runs[0]].get_exp()
 
-
 rnt_time, rnt = p[runs[0]].rnt
 rnt_unc = 0.1
 
-win=pw.plotWindow()
+win = pw.plotWindow()
 
-linestyles = ('solid','dashed','dotted','dashdot','loosely dotted')
+linestyles = ('solid', (0,(5,1)), 'dotted', 'dashdot', 'loosely dotted')
 lnstyle = iter(linestyles)
-fig = plt.figure() 
-fig.suptitle(f'{pulse}', fontsize=13) 
+
+fig = plt.figure()
+fig.suptitle(f'{pulse}', fontsize=13)
 ax = fig.add_subplot(111)
 
-ax.plot(rnt_time,rnt,color='r',linewidth=2,label='TIN/RNT')
-ax.fill_between(rnt_time, 
-        (1 - rnt_unc) * rnt, 
-        (1 + rnt_unc) * rnt, 
-        alpha=0.4, 
-        facecolor='r', 
-        edgecolor='none'
-        )
+ax.plot(rnt_time, rnt, color='r', linewidth=2, label='TIN/RNT')
+ax.fill_between(rnt_time,
+                (1 - rnt_unc) * rnt,
+                (1 + rnt_unc) * rnt,
+                alpha=0.4,
+                facecolor='r',
+                edgecolor='none')
 
 for run in runs:
     ln = next(lnstyle)
-    ax.plot(p[run].transp_time+40,
+    label = args.label[runs.index(run)] if args.label else f'{run} NEUTT'
+    ax.plot(p[run].transp_time + 40,
             p[run].transp('NEUTT'),
-            color='k',
+            color=args.color[runs.index(run)] if args.color else 'k',
             linewidth=2,
-            linestyle=ln,
-            label=f'{run} NEUTT'
-            )
-
-
-
+            linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+            label=label
+           )
 
 ax.set_xlabel('time [s]')
 ax.set_ylabel(r'$s^{-1}$')
-cornernote(ax,pulse)
-ax.set_xlim(p[runs[0]].transp_time[0]+40,p[runs[0]].transp_time[-1]+40)
-leg=ax.legend()
+# cornernote(ax,pulse) # This function seems to be custom, you can uncomment and use if needed
+ax.set_xlim(p[runs[0]].transp_time[0] + 40, p[runs[0]].transp_time[-1] + 40)
+leg = ax.legend()
 leg.set_draggable(True)
 
-win.addPlot('RNT',fig)
+win.addPlot('RNT', fig)
 
 win.show()
 
