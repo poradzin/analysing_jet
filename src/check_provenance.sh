@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Check if the correct number of arguments is provided
-if [[ $# -lt 5 || $# -gt 6 ]]; then
-    echo "Usage: $0 <directory> <section> <letter> <start_number> <end_number> [w]"
+if [[ $# -lt 4 || $# -gt 6 ]]; then
+    echo "Usage: $0 <directory> <section> <letter> <start_number> [<end_number>] [W]"
     exit 1
 fi
 
@@ -11,7 +11,14 @@ directory=$1
 section=$2
 letter=$3
 start_number=$(printf "%02d" $4)
-end_number=$(printf "%02d" $5)
+# Check if the end number is provided
+if [[ $# -ge 5 ]]; then
+    end_number=$(printf "%02d" $5)
+else
+    end_number=$(printf "%02d" $4)
+fi
+
+
 
 # Check if the script should write to a file
 write_to_file=false
