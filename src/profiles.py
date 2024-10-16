@@ -2,6 +2,7 @@ from netCDF4 import Dataset
 import ppf
 import matplotlib.pyplot as plt
 import numpy as np
+import f90nml
 from scipy.interpolate import interp1d 
 import sys
 import os
@@ -37,7 +38,7 @@ class Transp():
         path = f"/common/transp_shared/Data/result/JET/{pulse:d}/{tr_seq.upper()}/"
         # Initial CDF file path
         cdfpath = f'/common/transp_shared/Data/result/JET/{pulse}/{runid}/{pulse}{runid}.CDF'
-
+        nmlpath = f'/common/transp_shared/Data/result/JET/{pulse}/{runid}/{pulse}{runid}TR.DAT'
         # Check if the file exists
         if not os.path.isfile(cdfpath):
             # Check the alternate case in results directory
@@ -58,18 +59,28 @@ class Transp():
             print('Using netCDF file found in results directory.\n')
 
         self._cdfloc = cdfpath
+        self._nmlloc = nmlpath
         #self._cdfloc = f'/common/transp_shared/Data/result/JET/{pulse}/{runid}/{pulse}{runid}.CDF'
         self._dat = Dataset(self._cdfloc)
         self._dat_list=[item for item in self._dat.variables.keys()]
-        self._x = self.get("X")
-        self._t = self.get("TIME3")
+        self._namelist = f90nml.read(self._nmlloc)
+        self._x = self.get_key("X")
+        self._t = self.get_key("TIME3")
         self._dt = np.concatenate(([(self._t[1] - self._t[0])/2], (self._t[2:] - self._t[:-2])/2, [(self._t[-1] - self._t[-2])]))
-        self._dvol = self.get('DVOL')
+        self._dvol = self.get_key('DVOL')
         self._transp = {}
         self._units = {}
         self._long_name = {}
         self._transp_names = []
         self._transp_time = []
+        self.xzimps = self._namelist.get('plasma_composition', {}).get('xzimps', None)
+        self.xzimp = self._namelist.get('plasma_composition', {}).get('xzimp', None)
+        self._multiple_imps = self.check_signal('NIMPS')
+        self._impurities, self._imp_charges = self.__find_impurities_and_charges()
+        self.single_imp = True if len(self._impurities) == 0 else False
+        self._zeff = self.get_key("ZEFF")
+        self._zeffpro = self.get_key("ZEFFPRO") if self.check_signal('ZEFFPRO') else None
+        self._zeffp = self.get_key("ZEFFP") if self.check_signal('ZEFFP') else None
     @property
     def pulse(self):
         return self._pulse
@@ -97,7 +108,23 @@ class Transp():
     @property
     def dt(self):
         return self._dt
-    def get(self, key):
+    @property 
+    def impurities(self):
+        return self._impurities
+    @property 
+    def imp_charges(self):
+        return self._imp_charges
+    @property
+    def zeff(self):
+        return self._zeff
+    @property
+    def zeffp(self):
+        return self._zeffp
+    @property
+    def zeffpro(self):
+        return self._zeffpro
+
+    def get_key(self, key):
         return np.array(self._dat.variables[key])
     def transp(self,signal):
         if signal in self._transp.keys():
@@ -111,12 +138,67 @@ class Transp():
     def long_name(self,signal):
         if signal in self._transp.keys():                                                           
             return self._long_name[signal]
+
     def signal(self,signal):
         if signal in self._transp.keys():          
             return True
         else:
             print(f'Signal {signal} not present')
             return False
+
+    def check_signal(self, signal):
+        if signal in self._dat_list:          
+            return True
+        else:
+            print(f'Signal {signal} not present')
+            return False
+        return self.signal(signal)
+     
+    def find_impurities(self): 
+        impurities = []
+        for key in self._dat_list:
+            if key.startswith('NIMPS_'):
+                # Extract the element symbol (everything after 'NIMPS_')
+                element = key.split('_')[1]
+                if element not in impurities:
+                    impurities.append(element)
+        return impurities
+
+    def __find_impurities_and_charges(self):
+        imp_charges = {}
+        impurities = []
+        # Find all keys that match the pattern 'NIMP_'
+        for key in self._dat_list:
+            if key.startswith('NIMP_'):
+                parts = key.split('_')
+                if len(parts) == 3:
+                    impurity = parts[1]
+                    charge_state = int(parts[2])
+
+                    # Add impurity to the dictionary and impuritiies list if not present
+                    if impurity not in imp_charges:
+                        imp_charges[impurity] = []
+                        impurities.append(impurity)
+
+                    # Add the charge state to the impurity entry
+                    if charge_state not in imp_charges[impurity]:
+                        imp_charges[impurity].append(charge_state)
+
+        return (impurities, imp_charges)
+
+    def read_imp_charge_densities(self):
+        self.add_data(f'NIMP')
+        for impurity in self._impurities:
+            self.add_data(f'NIMPS_{impurity}')
+            self.add_data(f'ZIMPS_{impurity}')
+            for charge_state in self._imp_charges[impurity]:
+                signal_name = f'NIMP_{impurity}_{charge_state}'
+                if self.check_signal(signal_name):
+                    self.add_data(signal_name)
+                else:
+                    print(f'{signal_name} not found.')
+        return None 
+  
     def get_ind(value, data):
         return np.abs(data - value).argmin()
 
