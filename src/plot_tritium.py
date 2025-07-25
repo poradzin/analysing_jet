@@ -21,14 +21,18 @@ else:
 ratio_W = np.average(profs.wiesen,weights=profs.dt)
 
 Meff = np.average(profs.meff,weights=profs.dt)
+print(f'np.any(profs.ntnd_av>0): {np.any(profs.ntnd_av>0)}')
+NDoverNTND = f'{1/(1+profs.ntnd_av)*100:.6f}%\n' if np.any(profs.ntnd_av>0) else '0\n'
+print(NDoverNTND)
 text = (
-        r'$T_{conc}=\left<\frac{n_T}{n_H+n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.4f}%\n'
-        r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av*100:.4f}%\n'
+        r'$\left<\frac{n_T}{n_H+n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.4f}%\n'
+        r'$\left<\frac{n_D}{n_D+n_T}\right>=$'+NDoverNTND+
+        #r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av*100:.4f}%\n'
         r'$ \left<n_T/n_e\right>=$'+f'{profs.ntne_av*100:.4f}%'
        )
 
 print(f'Meff = {Meff}')
-
+print(f'nT/nD = {profs.ntnd_av:6f}')
 props = dict(boxstyle='round', facecolor='white', alpha=0.5)
 
 win=pw.plotWindow()
@@ -83,12 +87,13 @@ fig.suptitle(f'Neutron rates vs T density', fontsize=13)
 ax = fig.add_subplot(111)                                                                      
                                                                                                
 text = (                                                                                       
-        r'$T_{conc}=\left<\frac{n_T}{n_H+n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.3f}%\n'                  
-        r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av:.6f}\n'                                           
-        r'$ \left<R_{DT/DD}\right>=\left<\frac{R_{nDT}}{R_{nDD}}\right>=$'+f'{profs.Rdtdd_av:.4f}\n'   
-        r'$ \left<(n_T/n_D)/R_{DT/DD}\right> = $'+f'{ratio:.4f}'+'\n'                                  
-        r'$ \left< Wiesen\,\, coefficient\right>:$'+f' {ratio_W:.4f}\n'                                
-        r'$n_D,n_T,R_{nDT},R_{nTT}$ volume integrated.'                                                
+        r'$T_{conc}=\left<\frac{n_T}{n_H+n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.3f}\n'
+        r'$D_{frac}=\left<\frac{n_D}{n_D+n_T}\right>=$'+f'{1/(1+profs.ntnd_av):.6f}\n'
+        #r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av:.6f}\n'                                           
+        #r'$ \left<R_{DT/DD}\right>=\left<\frac{R_{nDT}}{R_{nDD}}\right>=$'+f'{profs.Rdtdd_av:.4f}\n'   
+        #r'$ \left<(n_T/n_D)/R_{DT/DD}\right> = $'+f'{ratio:.4f}'+'\n'                                  
+        #r'$ \left< Wiesen\,\, coefficient\right>:$'+f' {ratio_W:.4f}\n'                                
+        #r'$n_D,n_T,R_{nDT},R_{nTT}$ volume integrated.'                                                
        )                                                                                              
                                                                                                
 ax.set_title(f'{profs.transpcid} Neutron rates vs T density')                                  

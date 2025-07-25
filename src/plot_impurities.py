@@ -68,11 +68,11 @@ nadvsim = {'BE': 0, 'NE': 0, 'NI': 0}
 
 pulse=int(sys.argv[1])                                                                              
 runid=str(sys.argv[2]) 
-time = float(sys.argv[3])
+time = float(sys.argv[3])# TRANSP convention
 
 profs = ps.Transp(pulse, runid)
 tind = ps.gi(profs.transp_time,time)
-
+print(f'Time input = {time}s')
 signals_start = ['NE','NI','NMINI','BDENS']
 signals = []
 #ion_signals = ['NI','NMINI','BDENS']
@@ -90,6 +90,23 @@ print(f'Impurities: {profs.impurities}')
 profs.add_data(*signals) 
 profs.read_imp_charge_densities()
 
+# get  WSXP data, times in JET convention
+#wsxp=ps.Getexp(pulse, uid='elitherl', seq=654)
+#wsxp.add_dty('ZEFF')
+#print(f"np.shape(wsxp.data['ZEFF']): {np.shape(wsxp.data['ZEFF'])}")
+#for dty in ['ZEFL', 'ZEFO', 'ZEFH']:
+#    wsxp.add_dty(dty)
+# get eq data from MMX in Provenance
+#eq=ps.Eq(pulse,dda = 'eftp',uid='gszepesi',seq=405)
+#rntf=np.zeros(np.shape(wsxp.data['ZEFF']))
+#for ind, timesl in enumerate(wsxp.t['ZEFF']):
+#    rntf[ind] = eq.rhop_to_rhot(timesl, np.sqrt(wsxp.x['ZEFF']))
+
+#wsxp.rntf['ZEFF'] = rntf
+
+print(f'Time after WSXP: {time}') 
+
+#wsxp.rntf
 # Sum electron densities from all charge states
 
 #profs._imp_charges = {'BE':[4], 'NI':[28],'NE':[10]}
@@ -106,7 +123,7 @@ if profs.xzimps is None:
 nsum = np.sum([profs.transp(sig) for sig in ion_signals], axis=0) + total_imp_el_density# -0.5*profs.transp('NMINI')
 
 #slice at time
-
+conversion = 1.e6
 ############
 win=pw.plotWindow()                                                                                 
                                                                                                         
@@ -115,7 +132,7 @@ fig.suptitle(f'{profs.runcid} densities at {profs.t[tind]+40:.3f}s', fontsize=13
 ax = fig.add_subplot(111)   
 ax.plot(
         profs.x[ps.gi(profs.transp_time,time)],
-        profs.transp('NE')[ps.gi(profs.transp_time,time)],
+        profs.transp('NE')[ps.gi(profs.transp_time,time)]*conversion,
         color='red',
         linewidth=2,
         label=r'$n_e$'
@@ -125,36 +142,36 @@ ax.plot(
 for sig in ion_signals:
     ax.plot(
         profs.x[ps.gi(profs.transp_time,time)],
-        profs.transp(sig)[ps.gi(profs.transp_time,time)],
+        profs.transp(sig)[ps.gi(profs.transp_time,time)]*conversion,
         linewidth=2,
         label=sig
         )
 
 
-ax.plot(
-        profs.x[ps.gi(profs.transp_time,time)],
-        nsum[ps.gi(profs.transp_time,time)],
-        color='black',
-        linewidth=2,
-        label=' + '.join(ion_signals)+r'+ $\sum_{i,imp} Z_i n_{i,imp}$'
-        )
+#ax.plot(
+#        profs.x[ps.gi(profs.transp_time,time)],
+#        nsum[ps.gi(profs.transp_time,time)],
+#        color='black',
+#        linewidth=2,
+#        label=' + '.join(ion_signals)+r'+ $\sum_{i,imp} Z_i n_{i,imp}$'
+#        )
 
 for imp in profs.impurities: 
     ax.plot(
         profs.x[ps.gi(profs.transp_time,time)],
-        imps_el_densities[imp][ps.gi(profs.transp_time,time)],
+        imps_el_densities[imp][ps.gi(profs.transp_time,time)]*conversion,
         label=imp+':'+r'$\sum Z_i n_i$ ',
         linestyle='--',
         )
 if not profs.xzimps:
     ax.plot(
         profs.x[ps.gi(profs.transp_time,time)],
-        imps_el_densities[ps.gi(profs.transp_time,time)],
+        imps_el_densities[ps.gi(profs.transp_time,time)]*conversion,
         label=r'$Z_i n_i$ '+': '+r'$Z_i$='+str(profs.xzimp),
         linestyle='--',
         ) 
 ax.set_xlabel(r'$\rho_{tor}^{norm}$')                                                                           
-ax.set_ylabel(r'$cm^{-3}$')                                                                          
+ax.set_ylabel(r'$m^{-3}$') 
 leg=ax.legend()                                                                                     
 leg.set_draggable(True) 
 win.addPlot('Density profiles',fig)  
@@ -186,7 +203,8 @@ if profs.zeffp is not None:
         color='r',
         linestyle='-',
         )    
-    if profs.zeffpro is not None: 
+    #if profs.zeffpro is not None: 
+    if False:
         ax.plot(
             profs.x[ps.gi(profs.transp_time,time)],     
             profs.zeffpro[ps.gi(profs.transp_time,time)],
@@ -201,10 +219,62 @@ if profs.zeffp is not None:
             label=f'ZEFF_{imp}',                                                                   
             linestyle='-',                                                                          
             )
-    ax.set_xlabel(r'$\rho_{tor}^{norm}$')                                                                           
+#    if 'ZEFF' in wsxp.dty:
+#        ax.plot(
+#           wsxp.rntf['ZEFF'][ps.gi(wsxp.t['ZEFF'],time+40.)],
+#           wsxp.data['ZEFF'][ps.gi(wsxp.t['ZEFF'],time+40.)],
+#           label=f'ZEFF WSXP',
+#           color = 'k',
+#           linestyle = '--'
+#           )
+#    if 'ZEFO' in wsxp.dty:
+#        ax.plot(
+#           wsxp.rntf['ZEFF'][ps.gi(wsxp.t['ZEFF'],time+40.)],
+#           wsxp.data['ZEFO'][ps.gi(wsxp.t['ZEFO'],time+40.)],
+#           label=f'Ni WSXP',
+#           color = 'darkorange',
+#           linestyle = '--'
+#           )
+
+#    if 'ZEFL' in wsxp.dty:
+#        ax.plot(
+#           wsxp.rntf['ZEFF'][ps.gi(wsxp.t['ZEFF'],time+40.)],
+#           wsxp.data['ZEFL'][ps.gi(wsxp.t['ZEFL'],time+40.)],
+#           label=f'Be WSXP',
+#           color = 'steelblue',
+#           linestyle = '--'
+#           )
+
+    
+    ax.set_xlabel(r'$\rho_{tor}^{norm}$')
+    ax.set_ylim([0,4.5])
     leg=ax.legend()                                                                                     
     leg.set_draggable(True) 
     win.addPlot(' Effective charge profiles',fig)                                            
-                                                                                    
+
+tr2wsxp = {'BE': 'ZEFL', 'NI': 'ZEFO', 'W': 'ZEFH'}
+for imp in profs.impurities:
+#    wsxpzeff = tr2wsxp[imp]
+    fig = plt.figure()                                                                                  
+    fig.suptitle(f'{profs.runcid} {imp} ZEFF profile at {profs.t[tind]+40:.3f}s', fontsize=13)
+    ax = fig.add_subplot(111)
+    ax.plot(                                                                                    
+        profs.x[ps.gi(profs.transp_time,time)],                                                 
+        imp_zeff[f'{imp}'][ps.gi(profs.transp_time,time)],                            
+        label=f'ZEFF_{imp}',                                                                   
+        linestyle='-',                                                                          
+        )
+
+#    ax.plot(
+#           wsxp.rntf['ZEFF'][ps.gi(wsxp.t['ZEFF'],time+40.)],
+#           wsxp.data[wsxpzeff][ps.gi(wsxp.t[wsxpzeff],time+40.)],
+#           label=f'{imp} WSXP {ps.gi(wsxp.t[wsxpzeff],time+40.)}, t= {time+40.:.3f}'
+#           )
+    ax.set_xlabel(r'$\rho_{tor}^{norm}$')
+    ax.set_ylim([0,None])
+    leg=ax.legend()                                                                                     
+    leg.set_draggable(True) 
+    win.addPlot(f'{imp} effective charge profiles',fig)                                            
+
 win.show()     
 

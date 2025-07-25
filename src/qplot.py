@@ -4,6 +4,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import profiles as pr
 import numpy as np
 import scipy as sc
+import itertools
 #from scipy.interpolate import interp1d
 
 
@@ -372,6 +373,10 @@ class QProfileGUI:
                 return plt.get_cmap(colormap)((x-qmin)/(qmax-qmin)*(cmax-cmin)+cmin)
             else:
                 return plt.get_cmap(colormap)(0.5)
+        
+        # Plot follow_q for equilibrium pulses                                                      
+        line_styles = ['-', '--', '-.', ':']  # Define line styles for different equilibria
+        line_style_cycle = itertools.cycle(line_styles)  # Cycle through line styles
 
         # Plot follow_q for equilibrium pulses
         for eq_pulse_entry, dda_entry, uid_entry, seq_entry, follow_q_entry in zip(
@@ -383,6 +388,7 @@ class QProfileGUI:
             follow_q_values = [float(q.strip()) for q in follow_q_entry.split(",")]
 
             eq = pr.Eq(pulse=pulse, dda=dda, uid=uid, seq=seq)
+            linestyle = next(line_style_cycle)  # Get the next line style
 
             for follow_q in follow_q_values:
                 q_value = follow_q
@@ -402,7 +408,7 @@ class QProfileGUI:
 
                 # Plot the q value evolution
                 color = color_map(q_value)
-                ax.plot(eq.t, q_loc, label=f"Pulse {pulse}/{dda}/{uid}/{seq}, q={q_value}", color=color)
+                ax.plot(eq.t, q_loc, label=f"Pulse {pulse}/{dda}/{uid}/{seq}, q={q_value}", color=color, linestyle=linestyle)
 
         # Plot follow_q for TRANSP pulses
         for transp_pulse_entry, runid_entry, follow_q_transp_entry in zip(

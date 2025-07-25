@@ -2,7 +2,7 @@
 
 # Check if the correct number of arguments is provided
 if [[ $# -lt 4 || $# -gt 6 ]]; then
-    echo "Usage: $0 <directory> <section> <letter> <start_number> [<end_number>] [W]"
+    echo "Usage: $0 <pulse> <section> <letter> <start_number> [<end_number>] [W]"
     exit 1
 fi
 
@@ -49,15 +49,16 @@ for i in $(seq -f "%02g" $4 $5); do
 
         # Extract DDA, UID, and SEQ values from the specified section
         DDA=$(echo "$sec_lines" | grep "^DDA" | awk -F ' : ' '{print $2}')
+        DTY=$(echo "$sec_lines" | grep "^DTY" | awk -F ' : ' '{print $2}')
         UID_VAL=$(echo "$sec_lines" | grep "^UID" | awk -F ' : ' '{print $2}')
         SEQ=$(echo "$sec_lines" | grep "^SEQ" | awk -F ' : ' '{print $2}')
 
         # Print the result to the terminal
-        echo "${letter}$i:$section: $DDA/$UID_VAL/$SEQ"
+        echo "${letter}$i:$section: $DDA/$DTY/$UID_VAL/$SEQ"
         
         # Save the result to the output file if writing is enabled
         if [[ $write_to_file == true ]]; then
-            echo "${letter}$i:$section: $DDA/$UID_VAL/$SEQ" >> $output_file
+            echo "${letter}$i:$section: $DDA/$DTY/$UID_VAL/$SEQ" >> $output_file
         fi
     else
         echo "Run ${letter}${i} does not exist"  # Optional: handle missing files

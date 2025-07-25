@@ -5,8 +5,23 @@ import numpy as np
 import profiles as ps
 import sys
 
-pulse=int(sys.argv[1])
-runid=str(sys.argv[2])
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('pulse', type=int)
+parser.add_argument('runid', type=str)
+parser.add_argument('--add_strap', nargs=2, type=float, metavar=('XMIN', 'XMAX'),
+                    help='Add a shaded vertical strap between XMIN and XMAX (in seconds)')
+parser.add_argument('--strap_color', default='lightgrey', help='Color of the strap (default: lightgrey)')
+parser.add_argument('--strap_alpha', type=float, default=0.5, help='Transparency of the strap (default: 0.5)')
+
+args = parser.parse_args()
+
+pulse = args.pulse
+runid = args.runid
+
+#pulse=int(sys.argv[1])
+#runid=str(sys.argv[2])
 
 
 neutrons= ps.Neutrons(pulse,runid)
@@ -29,14 +44,31 @@ def cornernote(axis):
             label='cornernote'
             )
     return None
+
+import numpy as np
+
+def safe_divide(x, y):
+    """Returns (x, x/y) where y > 0, and 0 elsewhere"""
+    result = np.zeros_like(x)
+    mask = y > 0
+    result[mask] = x[mask] / y[mask]
+    return result
+
 rnt_time, rnt = neutrons.rnt
 rnt_unc = 0.1
 
-win=pw.plotWindow()
 
+win=pw.plotWindow()
+###################################################################
 fig = plt.figure() 
 fig.suptitle(f'Thermal vs. beam', fontsize=13) 
 ax = fig.add_subplot(111)
+
+# Optionally add strap
+if args.add_strap:
+    xmin, xmax = args.add_strap
+    ax.axvspan(xmin, xmax, color=args.strap_color, alpha=args.strap_alpha)
+
 
 ax.plot(rnt_time,rnt,color='r',linewidth=2,label='Measured')
 ax.fill_between(rnt_time, 
@@ -82,9 +114,17 @@ leg.set(draggable=True)
 #win.cornernote(neutrons.transpcid)
 win.addPlot('th vs. beam',fig)
 
+##################################################################################################
+#################################################################################################
 fig = plt.figure() 
 #fig.suptitle(f'neutron_rate - DT split up', fontsize=13) 
 ax = fig.add_subplot(111)
+
+# Optionally add strap
+if args.add_strap:
+    xmin, xmax = args.add_strap
+    ax.axvspan(xmin, xmax, color=args.strap_color, alpha=args.strap_alpha)
+
 
 ax.set_title(f'{neutrons.transpcid} Thermal vs. beam-target neutrons')
 
@@ -161,7 +201,32 @@ leg=ax.legend()
 leg.set_draggable(True)
 win.addPlot('thermal vs. DT',fig)
 
+################################################################################################
+#################################################################################################
+fig = plt.figure() 
+#fig.suptitle(f'neutron_rate - DT split up', fontsize=13) 
+ax = fig.add_subplot(111)
 
+# Optionally add strap
+if args.add_strap:
+    xmin, xmax = args.add_strap
+    ax.axvspan(xmin, xmax, color=args.strap_color, alpha=args.strap_alpha)
+
+
+ax.set_title(f'{neutrons.transpcid} Thermal, beam-target ratio to total. ')
+
+ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('NEUTT')),color='orange',linewidth=2, label="TH/TOT")
+ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('BTNTS'),neutrons.transp('NEUTT')),color='blue',linewidth=2, label="BT/TOT")
+
+ax.set_xlabel('time [s]')
+#ax.set_ylabel(r'$s^{-1}$')
+cornernote(ax)
+ax.set_xlim(neutrons.transp_time[0]+40,neutrons.transp_time[-1]+40)
+leg=ax.legend()
+leg.set_draggable(True)
+win.addPlot('thermal/DT ratio',fig)
+
+#
 
 win.show()
 

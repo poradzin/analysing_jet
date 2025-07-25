@@ -494,6 +494,55 @@ class EXP():
         return self._hthd
 
 
+class Getexp():
+    def __init__(self,pulse, dda='WSXP', uid='jetppf', seq=0, device = 'JET'):
+        self._pulse = pulse
+        self._dda = dda
+        self._uid = uid
+        self._seq = seq
+        self._device = device
+        self.data = {}
+        self.x = {}
+        self.rntf = {}
+        self.t = {}
+        self.dty = []
+        self.ppf = []
+        self._ierr=ppf.ppfgo(pulse=self._pulse,seq=self._seq)
+        ppf.ppfsetdevice(self._device)
+        ppf.ppfuid("JETPPF","r")
+        if self._ierr != 0:
+            raise IOError('Error initialising equlibrium PPF routines.')
+
+    def get_dat(self,dtype, dda=None, uid=None, seq=None ,kwargs={}):
+        return ppf.ppfdata(self._pulse, dda, dtype, uid, seq,**kwargs)
+   
+    def add_dty(self,dty, dda=None, uid=None, seq=None):
+        if dda is None:
+            dda = self._dda
+        if uid is None:
+            uid = self._uid
+        if seq is None:
+            seq = self._seq
+        get=lambda dtyp:ppf.ppfget(self._pulse,dda,dtyp)
+        print(f'dty: {dty}')
+        print(f'dda: {dda}')
+        print(f'uid: {uid}')
+        print(f'seq: {seq}')
+        data, x, t, *_, ier = self.get_dat(dty, dda=dda, uid=uid, seq=seq)
+        print(f'{dty}: np.shape(data): {np.shape(data)}')
+        print(f'{dty}: np.shape(t): {np.shape(t)}')
+        print(f'{dty}: np.shape(x): {np.shape(x)}')
+        data.shape = (t.size, x.size)
+        print(f'{dty}: data reshaped np.shape(data): {np.shape(data)}')
+        if ier == 0:
+            self.dty.append(f'{dda}/{dty}')
+            self.data[f'{dda}/{dty}'], self.x[f'{dda}/{dty}'], self.t[f'{dda}/{dty}'] = data, x, t
+        else:
+            print(
+                f'{self._pulse}/{self.dda}/{dty}/{self._uid}/{self._seq} ier={ier}\n'
+                'ier not zero, Not saving.'
+                ) 
+
 class Eq():
     def __init__(self,pulse, dda='EFTP', uid='jetppf', seq=0):
         self._pulse = pulse

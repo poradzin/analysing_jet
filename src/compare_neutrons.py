@@ -89,11 +89,19 @@ def cornernote(axis,text):
 
 # Function to parse command line arguments
 def parse_arguments():
-    parser = argparse.ArgumentParser(description='Description of your program')
-    parser.add_argument('pulse', type=int, help='Description of pulse argument')
+    parser = argparse.ArgumentParser(description='Compares neutron rates of several TRANSP runs')
+    parser.add_argument('pulse', type=int, help='JET discharge number')
     parser.add_argument('--label', nargs='+', help='List of labels for runs')
     parser.add_argument('--color',nargs='+', help='List of colors for runs')
     parser.add_argument('--linestyle',nargs='+', help='List of linestyles for runs')
+    parser.add_argument('--total',action='store_true', 
+            help='Plots only total neutron rate.')
+    parser.add_argument('--thermal',action='store_true', 
+            help='Adds thermal neutron rate component.')
+    parser.add_argument('--beam',action='store_true', 
+            help='Adds beam target neutron rate component.')
+    parser.add_argument('--time_trace',action='store_true', 
+            help='Creates time-trace plot comparing different components.')
     parser.add_argument('runs', nargs='+', help='List of runs')
     return parser.parse_args()
 
@@ -113,8 +121,6 @@ if args.linestyle and len(args.linestyle) != len(runs):
     print("Error: Number of linestyles provided does not match the number of TRANSP runs.")
     sys.exit(1)
 
-if args.linestyle:
-    print('TUTAU')
 # Convert linestyle strings or tuples to appropriate format
 linestyles = []
 if args.linestyle:
@@ -143,11 +149,15 @@ rnt_unc = 0.1
 
 win = pw.plotWindow()
 
-linestyles = ('solid', (0,(5,1)), 'dotted', 'dashdot', 'loosely dotted')
+if args.total:
+    linestyles = ('solid', (0,(5,1)), 'dotted', 'dashdot')
+    #color = iter(plt.cm.rainbow(np.linspace(0,1,len(p))))
+else:
+    linestyles = ('solid', 'dotted', (0,(5,1)), 'dotted', 'dashdot', 'loosely dotted')
 lnstyle = iter(linestyles)
-
+    
 fig = plt.figure()
-fig.suptitle(f'{pulse}', fontsize=13)
+fig.suptitle(f'{pulse} neutron rate', fontsize=13)
 ax = fig.add_subplot(111)
 
 ax.plot(rnt_time, rnt, color='r', linewidth=2, label='TIN/RNT')
@@ -157,26 +167,136 @@ ax.fill_between(rnt_time,
                 alpha=0.4,
                 facecolor='r',
                 edgecolor='none')
-
-for run in runs:
+if args.total:
     ln = next(lnstyle)
-    label = args.label[runs.index(run)] if args.label else f'{run} NEUTT'
+    for ind, run in enumerate(runs):
+        lbt = 'total\n' if ind==0 else ''
+        label = lbt + args.label[runs.index(run)] if args.label else f'{run} NEUTT'
+        ax.plot(p[run].transp_time + 40,
+                p[run].transp('NEUTT'),
+                color=args.color[runs.index(run)] if args.color else 'k',
+                linewidth=2,
+                linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+                label=label
+               )
+
+
+if args.beam: 
+    ln = next(lnstyle)
+    for ind, run in enumerate(runs):
+        bt = 'beam-target' if ind==0 else ''
+        label = bt+ args.label[runs.index(run)] if args.label and not args.total else bt 
+        ax.plot(p[run].transp_time + 40,
+                p[run].transp('BTNTS'),
+                color=args.color[runs.index(run)] if args.color else 'b',
+                linewidth=2,
+                linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+                #linestyle = 'dashdot',
+                label=label
+               )
+if args.thermal:
+    ln = next(lnstyle) 
+    for ind, run in enumerate(runs):
+        lth = 'thermal\n'if ind==0 and not (args.total or args.beam) else 'thermal' if ind==0 else ''
+        label = lth+ args.label[runs.index(run)] if args.label and not (args.total or args.beam) else lth
+        ax.plot(p[run].transp_time + 40,
+                p[run].transp('NEUTX'),
+                color=args.color[runs.index(run)] if args.color else 'orange',
+                linewidth=2,
+                linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+                #linestyle = 'dashed',
+                label=label
+               )
+ 
+if not (args.total or args.thermal or args.beam):
+    lnstyle = iter(linestyles)
+    for ind, run in enumerate(runs):
+        ln = next(lnstyle)
+        lbt = 'beam-target'if ind==0 else ''
+        ax.plot(p[run].transp_time + 40,
+                p[run].transp('BTNTS'),
+                color=args.color[runs.index(run)] if args.color else 'b',
+                linewidth=2,
+                linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+                label=lbt
+               )
+    
+        lth = 'thermal'if ind==0 else ''
+        ax.plot(p[run].transp_time + 40,
+                p[run].transp('NEUTX'),
+                color=args.color[runs.index(run)] if args.color else 'orange',
+                linewidth=2,
+                linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+                label=lth
+               )
+    
+        lth = 'beam-beam'if ind==0 else ''
+        ax.plot(p[run].transp_time + 40,
+                p[run].transp('BBNTS'),
+                color=args.color[runs.index(run)] if args.color else 'green',
+                linewidth=2,
+                linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+                label=lth
+               )
+
+
+
+ax.set_xlabel('time [s]')
+ax.set_ylabel(r'$s^{-1}$')
+# cornernote(ax,pulse) # This function seems to be custom, you can uncomment and use if needed
+ax.set_xlim(p[runs[0]].transp_time[0] + 40, p[runs[0]].transp_time[-1] + 40)
+leg = ax.legend(loc='best')
+leg.set_draggable(True, use_blit=False, update='loc')
+
+win.addPlot('RNT', fig)
+
+
+if args.total:
+    linestyles = ('solid', (0,(5,1)), 'solid', 'dotted', 'dashdot')
+    #color = iter(plt.cm.rainbow(np.linspace(0,1,len(p))))
+else:
+    linestyles = ('solid', 'dotted', (0,(5,1)), 'dotted', 'dashdot', 'loosely dotted')
+lnstyle = iter(linestyles)
+    
+fig = plt.figure()
+fig.suptitle(f'{pulse} neutron ratios', fontsize=13)
+ax = fig.add_subplot(111)
+
+lnstyle = iter(linestyles)
+ln = next(lnstyle)
+for ind, run in enumerate(runs):
+    bt = 'beam-target\n' if ind==0 else ''
+    label = bt+ args.label[runs.index(run)] if args.label else bt 
+
+    lbt = 'beam-target'if ind==0 else ''
     ax.plot(p[run].transp_time + 40,
-            p[run].transp('NEUTT'),
-            color=args.color[runs.index(run)] if args.color else 'k',
+            p[run].transp('BTNTS')/p[run].transp('NEUTT'),
+            color=args.color[runs.index(run)] if args.color else 'b',
+            linewidth=2,
+            linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
+            label=label
+           )
+
+ln = next(lnstyle)
+for ind, run in enumerate(runs):
+    th = 'thermal' if ind==0 else ''
+    label = th
+    ax.plot(p[run].transp_time + 40,
+            p[run].transp('NEUTX')/p[run].transp('NEUTT'),
+            color=args.color[runs.index(run)] if args.color else 'orange',
             linewidth=2,
             linestyle=args.linestyle[runs.index(run)] if args.linestyle else ln,
             label=label
            )
 
 ax.set_xlabel('time [s]')
-ax.set_ylabel(r'$s^{-1}$')
+#ax.set_ylabel(r'$s^{-1}$')
 # cornernote(ax,pulse) # This function seems to be custom, you can uncomment and use if needed
 ax.set_xlim(p[runs[0]].transp_time[0] + 40, p[runs[0]].transp_time[-1] + 40)
-leg = ax.legend()
-leg.set_draggable(True)
+leg = ax.legend(loc='best')
+leg.set_draggable(True, use_blit=False, update='loc')
 
-win.addPlot('RNT', fig)
+win.addPlot('Ratios', fig)
 
 win.show()
 

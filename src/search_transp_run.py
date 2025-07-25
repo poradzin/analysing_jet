@@ -10,12 +10,18 @@ def search_transp(pulse_number, run_id, search_string):
     run_dir = os.path.join(pulse_dir, run_id)
 
     # NetCDF file name
-    nc_file = os.path.join(run_dir, str(pulse_number) + run_id + '.CDF')
+    nc_file_1 = os.path.join(run_dir, str(pulse_number) + run_id + '.CDF')
+    nc_file_2 = os.path.join(run_dir, run_id + '.CDF')
 
-    if not os.path.exists(nc_file):
-        print(f"NetCDF file '{nc_file}' not found.")
+    if os.path.exists(nc_file_1):
+        nc_file = nc_file_1
+    elif os.path.exists(nc_file_2):
+        print(f"NetCDF file '{nc_file_1}' not found.")
+        nc_file = nc_file_2
+    else:
+        print(f"NetCDF file '{nc_file_1}' not found.")
+        print(f"NetCDF file {nc_file_2} not found.")
         return
-
     try:
         # Open NetCDF file
         dataset = nc.Dataset(nc_file)
@@ -45,7 +51,8 @@ if __name__ == '__main__':
 
     pulse_number = int(sys.argv[1])
     run_id = sys.argv[2]
-
+    print(f'Pulse no.: {pulse_number}')
+    print(f'run_id:    {run_id}')
     while True:
         search_string = input("Enter the string to search (press Enter to exit): ")
         if search_string:  # proceed only if the search string is not empty
