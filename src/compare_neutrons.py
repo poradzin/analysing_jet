@@ -279,7 +279,7 @@ for ind, run in enumerate(runs):
 
 ln = next(lnstyle)
 for ind, run in enumerate(runs):
-    th = 'thermal' if ind==0 else ''
+    th = 'thermal/tot' if ind==0 else ''
     label = th
     ax.plot(p[run].transp_time + 40,
             p[run].transp('NEUTX')/p[run].transp('NEUTT'),

@@ -28,6 +28,9 @@ neutrons= ps.Neutrons(pulse,runid)
 neutrons.get_transp_neutrons()
 neutrons.get_exp()
 
+transp=ps.Transp(pulse,runid)
+
+print(f'transp.x.shape: {transp.x.shape}')
 print(f'Times from {neutrons.t[0]:.3f}s to {neutrons.t[-1]:.3f}s.')
 print(f"Total TRANSP neutrons: {neutrons.total('NEUTT')}")
 print(f"Total TIN/RNT neutrons: {neutrons.tot_exp()}")  
@@ -52,6 +55,13 @@ def safe_divide(x, y):
     result = np.zeros_like(x)
     mask = y > 0
     result[mask] = x[mask] / y[mask]
+    return result
+
+def cum_int(x,jacobian):
+    """ Returns a cumulative integral across x dimension
+        Assumes that the integrated signal is 2D (time, x) 
+    """
+    result = np.cumsum(x*jacobian,axis=1)
     return result
 
 rnt_time, rnt = neutrons.rnt
@@ -225,6 +235,76 @@ ax.set_xlim(neutrons.transp_time[0]+40,neutrons.transp_time[-1]+40)
 leg=ax.legend()
 leg.set_draggable(True)
 win.addPlot('thermal/DT ratio',fig)
+
+################################################################################################
+#################################################################################################
+fig = plt.figure() 
+#fig.suptitle(f'neutron_rate - DT split up', fontsize=13) 
+ax = fig.add_subplot(111)
+
+# Optionally add strap
+if args.add_strap:
+    xmin, xmax = args.add_strap
+    ax.axvspan(xmin, xmax, color=args.strap_color, alpha=args.strap_alpha)
+
+
+ax.set_title(f'{neutrons.transpcid} TH/BT ratio ')
+
+ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('BTNTS')),color='blue',linewidth=2, label="TH/BT")
+#ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('BTNTS'),neutrons.transp('NEUTT')),color='blue',linewidth=2, label="BT/TOT")
+
+ax.set_xlabel('time [s]')
+#ax.set_ylabel(r'$s^{-1}$')
+cornernote(ax)
+ax.set_xlim(neutrons.transp_time[0]+40,neutrons.transp_time[-1]+40)
+leg=ax.legend()
+leg.set_draggable(True)
+win.addPlot('TH/BT ratio',fig)
+
+
+################################################################################################
+#################################################################################################
+fig = plt.figure() 
+#fig.suptitle(f'neutron_rate - DT split up', fontsize=13) 
+def thbt(transp, bnd): 
+    """
+    Based on data from instance obj finds a TH/BT ratio with radius x
+    """
+    # define cumulative integrals
+    th_c = cum_int(transp.get_key('THNTX'), transp.dvol)
+    bt_c = cum_int(transp.get_key('BTNTX'), transp.dvol)
+    # define a TH/BT ratio
+    thbt = safe_divide(th_c,bt_c)
+    #transp.x is 2D that is for each time sliece there is different x
+    # limit to values <bnd
+    result = np.zeros(transp.t.shape)
+    for i, _  in enumerate(transp.t):
+        i_bnd = np.abs(transp.x[i,:] - bnd).argmin()
+        result[i] = thbt[i,i_bnd]
+    return result
+
+bnd=0.2
+ax = fig.add_subplot(111)
+
+# Optionally add strap
+if args.add_strap:
+    xmin, xmax = args.add_strap
+    ax.axvspan(xmin, xmax, color=args.strap_color, alpha=args.strap_alpha)
+
+
+ax.set_title(f'{neutrons.transpcid} TH/BT ratio ')
+
+ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('BTNTS')),color='blue',linewidth=2, label="TH/BT average")
+ax.plot(neutrons.transp_time+40,thbt(neutrons,bnd),color='red',linewidth=2, label=r"TH/BT ($\rho<$"+f"{bnd})")
+#ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('BTNTS'),neutrons.transp('NEUTT')),color='blue',linewidth=2, label="BT/TOT")
+
+ax.set_xlabel('time [s]')
+#ax.set_ylabel(r'$s^{-1}$')
+cornernote(ax)
+ax.set_xlim(neutrons.transp_time[0]+40,neutrons.transp_time[-1]+40)
+leg=ax.legend()
+leg.set_draggable(True)
+win.addPlot('TH/BT ratio',fig)
 
 #
 

@@ -108,6 +108,9 @@ class Transp():
     @property
     def dt(self):
         return self._dt
+    @property
+    def dvol(self):
+        return self._dvol
     @property 
     def impurities(self):
         return self._impurities
