@@ -27,6 +27,27 @@ class Fun():
         else: 
             return False
 
+class Data:
+    def __init__(self, pulse, time):
+        self._pulse = pulse
+        self._t1 = time
+
+    @property
+    def pulse(self):
+        return self._pulse
+
+    @property
+    def t1(self):
+        '''requested time slice in TRANSP convention tah is JET time - 40s'''
+        return self._t1
+
+    @t1.setter
+    def t1(self, value):
+        if value < 40.0:
+            self._t1 = value
+        else:
+            raise ValueError(f'Time {value} not in TRANSP convention: JET time - 40s.')
+
 class Transp():
     def __init__(self,pulse,runid):
         self._pulse = pulse
@@ -206,7 +227,7 @@ class Transp():
         return np.abs(data - value).argmin()
 
     def profile(self,signal):
-        return get(signal) 
+        return self.get_key(signal) 
 
     def taver(tvec):
         return np.average(tvec,weights=self._dt)
@@ -496,7 +517,108 @@ class EXP():
     def hthd(self):
         return self._hthd
 
+class Exp:
+    def __init__(self, data_object, eq_object):
+        # Data.__init__(self, pulse)
+        self._pulse = data_object.pulse
+        self._t1 = data_object.t1
+        self._data_dict = {}
+        # general data is stored in data_object
+        self._gdata = data_object
+        self._eq = eq_object
+        self._color = {'NE': {'HRTS': 'm'}, 'TE': {'HRTS': 'g', 'KK3': 'orange'}}
+        self._rescale = {'NE': 1, 'TE': 1e-3, 'TI': 1e-3}
 
+    def add_data(self, dda, dty, uid, seq):
+        if dda == 'HRTS' and dty in ['NE', 'TE']:
+            data, x, t, nd, nx, nt, dunits, xunits, tunits, desc, comm, sequence, ier = ppf.ppfdata(
+                self._pulse, dda, dty, seq=seq, uid=uid, device='JET'
+            )
+            data_error, x_err, t_err, *_ = ppf.ppfdata(self._pulse, dda, f'D{dty}', seq=seq, uid=uid, device='JET')
+            data_z, x_z, t_z, *_ = ppf.ppfdata(self._pulse, dda, 'Z', seq=seq, uid=uid, device='JET')
+            if nd == nx * nt:
+                data = np.reshape(data, (len(t), len(x)))
+                data_error = np.reshape(data_error, (len(t_err), len(x_err)))
+                # data_z = np.reshape(data_z, (len(t_z), len(x_z)))
+            key = (dda, dty, uid, seq)
+            # print(f'ADD DATA: key: {key}')
+            x = self._eq.RZ_to_rhot(self._t1 + 40.0, np.array([x_z, data_z]))
+            self._data_dict[key] = {}
+            self._data_dict[key]['data'] = (data, x, t)
+            self._data_dict[key]['z'] = (data_z, x_z, t_z)
+            self._data_dict[key]['error'] = (data_error, x_err, t_err)
+            self._data_dict[key]['units'] = (dunits, xunits, tunits)
+            self._data_dict[key]['seq'] = sequence
+    def get_data(self, dda, dty, uid, seq, options=['data']):
+        key = (dda, dty, uid, seq)
+        if key not in self._data_dict:
+            return None
+        data_dict = {}
+        if 'data' in options:
+            data_dict['data'] = self._data_dict[key]['data']
+        if 'error' in options:
+            data_dict['error'] = self._data_dict[key]['error']
+        if 'units' in options:
+            data_dict['units'] = self._data_dict[key]['units']
+        if 'z_values' in options:
+            data_dict['z'] = self._data_dict[key]['z']
+        return data_dict
+
+    def plot(self, axis, t1, dda=None, dty=None, uid='jetppf', seq=0, range=None):
+        key = (dda, dty, uid, seq)
+        if key not in self._data_dict:
+            self.add_data(*key)
+
+        def filter_and_sort(x, y):
+            '''x and y assumed to be the same length'''
+            # change nans to 0
+            xx = np.nan_to_num(x, nan=0.0)
+            condition = xx > 0
+            x_nonzero = xx[condition]
+            y_nonzero = y[condition]
+            # sort x axis
+            sort = np.argsort(x_nonzero)
+            return (np.take(x_nonzero, sort), np.take(y_nonzero, sort), sort)
+
+        data, x, t = self._data_dict[key]['data']
+
+        # data_z,x_z,t_z = self._data_dict[key]['z']
+        data_error, x_err, t_err = self._data_dict[key]['error']
+        phn1 = np.argmin(np.abs(t - 40.0 - t1))
+        x_plot, y_plot, sort = filter_and_sort(x, data[phn1])
+        x_err, y_err = np.take(x_err, sort), np.take(data_error[phn1], sort)
+        if range is None:
+            x_min_ind = 0
+            x_max_ind = -1
+        else:
+            x_min_ind = np.argmin(np.abs(x_plot - range[0]))
+            x_max_ind = np.argmin(np.abs(x_plot - range[-1]))
+
+        # print(f'{dda} x: {x_plot}')
+        # print(f'x_min = {x_plot[x_min_ind]} at x_min_ind: {x_min_ind}')
+        # print(f'x_max = {x_plot[x_max_ind]} at x_max_ind: {x_max_ind}')
+        x_plot = x_plot[x_min_ind:x_max_ind]
+        y_plot = y_plot[x_min_ind:x_max_ind] * self._rescale[dty]
+        y_error = y_err[x_min_ind:x_max_ind] * self._rescale[dty]
+        # print(f'{dda} x_plot: {x_plot}')
+        # print(f'{dda} y_plot: {y_plot}')
+        if dda in self._color[dty]:
+            color = self._color[dty][dda]
+        else:
+            color = 'k'
+
+        axis.errorbar(
+            x_plot,
+            # self._eq.RZ_to_rhot(t1 + 40.0, np.array([x_z, data_z])),
+            # data[phn1]*self._rescale[dty],
+            y_plot,
+            # yerr=data_error[phn1][x_min_ind:x_max_ind]*self._rescale[dty],
+            yerr=y_error,
+            color=color,
+            fmt='o',
+            capsize=5,
+            label=f'{key[0]}/{key[2]}/{key[3]}@{t[phn1]:2.3f}',
+        )
 class Getexp():
     def __init__(self,pulse, dda='WSXP', uid='jetppf', seq=0, device = 'JET'):
         self._pulse = pulse
@@ -506,6 +628,7 @@ class Getexp():
         self._device = device
         self.data = {}
         self.x = {}
+        seld.z = {}
         self.rntf = {}
         self.t = {}
         self.dty = []
@@ -581,18 +704,26 @@ class Eq():
         self._vjac, self._vjac_x, *_ = ppf.ppfdata(
             self._pulse, self._dda, 'VJAC', reshape=(len(self._x), len(self._t)), uid=self._uid, seq=self._seq
         )
-        self._ftor, self._ftor_x, *_ = ppf.ppfdata(
+        self._ftor, self._ftor_x, *_ =  ppf.ppfdata(
             self._pulse, self._dda, 'FTOR', reshape=(len(self._x), len(self._t)), uid=self._uid, seq=self._seq
         )
         self._psirzmg = np.meshgrid(self._psir, self._psiz)
+        self._psi_norm = np.ones(self._psi.shape)
         self._sqrt_psi_norm = np.ones(self._psi.shape)
         self._sqrt_ftor_norm = np.ones(self._ftor.shape)
+        self._ftor_norm = np.ones(self._ftor.shape)
         for ic in range(len(self._t)):
+            self._psi_norm[ic,:]= (self._psi[ic, :] - self._faxs[ic]) / (self._fbnd[ic] - self._faxs[ic])
             self._sqrt_psi_norm[ic, :] = np.sqrt(
                 (self._psi[ic, :] - self._faxs[ic]) / (self._fbnd[ic] - self._faxs[ic]))  # sqrt_psi_norm=rho_pol(R,Z)
             self._sqrt_ftor_norm[ic, :] = np.sqrt(
                 self._ftor[ic, :] / self._ftor[ic, -1]
             )
+            self._ftor_norm[ic,:] = self._ftor[ic,:]/self._ftor[ic,-1]
+        self._psinm, self._psinm_x,*_ = self.get_dat('PSINM')
+    @property
+    def pulse(self):
+        return self._pulse
     @property
     def t(self):
         return self._t
