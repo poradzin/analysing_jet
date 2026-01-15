@@ -18,8 +18,12 @@ def parse_arguments():
     #parser.add_argument('-dty', '--datatype', help='PPF datatype') 
     parser.add_argument('-seq', '--sequence', type=int, default=0, help='PPF sequence, default=0') 
     parser.add_argument('-runid', '--runid', type=str, default=None, help="TRANSP runID")
+    parser.add_argument('-t','--time',type=float,default=None,help='time in JET convention i.e. time >40.0s')
     parser.add_argument('-prof', '--profile', type=str, default='TI', help="TRANSP output (t,x) signal")
-    parser.add_argument("--save", action="store_true", help="Save profile data to text file")
+    parser.add_argument('--save', action="store_true", help="Save profile data to text file")
+    parser.add_argument('-hrts','--hrts', action='store_true', help='Read HRTS data with seq=hrts_seq')
+    parser.add_argument('-hrts_seq','--hrts_seq',type=int, default=0, help='HRTS sequence number to be read, default=0')
+    parser.add_argument('-plot','--plot', action='store_true', help="Plots created profiles. Output depend on profile requested.")
     return parser.parse_args()
 
 def plot_psi(eq,time,nl=30):
@@ -593,8 +597,30 @@ def rhot_to_RZ_midplane(rhot_in, eq, time, norm=True,method='cubic'):
     Maps rhot onto RZ midplane (LFS) 
  
     """
+    tind = np.abs(eq.t-time).argmin()
+   
     psin_in =  sqrt_ftor_norm_to_psin(rhot_in,eq, time)
     print(f'psin_in.shape: {psin_in.shape}') 
+    Rpts = psin_to_RZ_midplane(psin_in, eq, time,method=method)
+    Rmag = eq.Rmag[tind]
+    if norm:
+        Rbnd = Rbnd_at_midplane(eq, time)
+        denom = Rbnd-Rmag
+        Rpts_out = (Rpts-Rmag)/denom
+    else:
+        Rpts_out = Rpts
+
+    return Rpts_out
+
+def rhop_to_RZ_midplane(rhop_in, eq, time, norm=True,method='cubic'):
+    """
+    Input: sqrt_psi_norm, eq, time slice
+    Maps rhot onto RZ midplane (LFS) 
+ 
+    """
+    tind = np.abs(eq.t-time).argmin()
+
+    psin_in = rhop_in**2
     Rpts = psin_to_RZ_midplane(psin_in, eq, time,method=method)
     Rmag = eq.Rmag[tind]
     if norm:
@@ -609,76 +635,75 @@ def rhot_to_RZ_midplane(rhot_in, eq, time, norm=True,method='cubic'):
 args = parse_arguments()  
 
 pulse = args.pulse 
-time=50.9
+time = args.time
+sig=args.profile
+runID=args.runid
+
 eq=ps.Eq(pulse,dda = args.dda, uid=args.uid,seq=args.sequence)
 dat = ps.Data(pulse, time)
 #ex = ps.Exp(dat, eq)
 
-
+# if hrts==True then read HRTS data with R and Z. Exclude R<Rmag
+if args.hrts:
+    hrts = ps.Exp(dat, eq)
+    hrts.add_data('HRTS',sig, 'jetppf', args.hrts_seq)
+    hrts_data = hrts.get_data('HRTS',sig, 'jetppf', args.hrts_seq, options=['data', 'error','seq'])
+    (data_hrts,x_hrts,t_hrts) = hrts_data['data']
+    print(f'shape(data_hrts): {np.shape(data_hrts)}')
+    print(f'shape(x_hrts): {np.shape(x_hrts)}')
+    Rmid_hrts = rhot_to_RZ_midplane(x_hrts, eq, time)
+    (error,x_err,t_err) = hrts_data['error']
+    tind_hrts = np.abs(t_hrts-time).argmin()
+    print(f'shape(t_hrts): {np.shape(t_hrts)}')
+    print(f'tind_hrts: t_hrts[{tind_hrts}]={t_hrts[tind_hrts]:.3f}s')
+    xmask_hrts = Rmid_hrts<=1.0                                                                          
+    x_h_mask = x_hrts<=1.0 
+if args.hrts and args.plot: 
+    plt.errorbar(Rmid_hrts[xmask_hrts],data_hrts[tind_hrts][xmask_hrts], yerr=error[tind_hrts][xmask_hrts],
+            fmt='o',
+            color='b',
+            label=f"HRTS/jetppf/{hrts_data['seq']} at {t_hrts[tind_hrts]:.3f}s"
+           )
+    #plt.errorbar(x_hrts[x_h_mask],data_hrts[tind_hrts][x_h_mask], yerr=error[tind_hrts][x_h_mask],fmt='o', color='b')
+    plt.ylim(0,1.1*np.max(data_hrts[tind_hrts][xmask]))
+    #plt.show()
 
 tind = np.abs(eq.t-time).argmin()
-print(f'tind = {tind}') 
+print(f'Eq tind = {tind}') 
 rpts = np.linspace(2.988,3.82,100)
 zpts = eq.Zmag[tind]* np.ones(100)
 
 
-#X point of 104448 at 50.9s
-rpts = [2.62543]
-zpts=[-1.457]
-
-# axis
-rpts = [eq.Rmag[tind]+2e-3]
-zpts = [eq.Zmag[tind]]
-# axis to separatrix 
-rpts = np.linspace(eq.Rmag[tind],Rbnd_at_midplane(eq, time),200)
-zpts = eq.Zmag[tind]*np.ones(rpts.shape)
-# sample point
-#rpts = [3.888]
-#zpts = [2.0618]
-
-
-#s, norm_raw, status, psi_at_pts = RZ_to_rhop(rpts, zpts, eq, time)
-
-RZ = np.array([rpts,zpts])
-psin_at_pts = RZ_to_psin(rpts, zpts, eq, time)
-psin_at_pts_2 = RZ_to_psin(rpts, zpts, eq, time, method='cubic')
-psin_at_pts_3 = RZ_to_psin_2(RZ,eq,time)
-
-#plt.plot(rpts,psin_at_pts)
-#plt.plot(rpts,psin_at_pts_2,'-')
-#plt.plot(rpts,psin_at_pts_3,'--')
-#plt.show()
-
-#print(f'RZ: {RZ}') 
-#print(f'psin_at_pts = {psin_at_pts}')
-#print(f'psin_at_pts_2 = {psin_at_pts_2}')
-#plot_psi(eq,time,nl=30)
-
-
 #sys.exit()
-runID=args.runid
-if runID is not None:
-    tr=ps.Transp(pulse,runID)
 # read Ti profiles
 
-sig=args.profile
-(t,x,vals) = (tr.t,tr.x,tr.profile(sig))
-trind = np.abs(tr.t+40-time).argmin()
-print(f'x.shape: {x.shape}')
-print(f't.shape: {t.shape}')
-plt.title(f'{pulse} TRANSP {runID} {sig} on {args.dda}/{args.uid}/{args.sequence} at {time}s')
-Rmid = rhot_to_RZ_midplane(tr.x[trind], eq, time)
+if runID is not None:
+    tr=ps.Transp(pulse,runID)
+    (t,x,vals) = (tr.t,tr.x,tr.profile(sig))
 
-plt.plot(tr.x[trind], vals[trind], label=f'on rhot at {t[trind]+40.:.3f}s')
-#plt.plot(tr.x[trind]**2, ti[trind], 'g', label=f'on ftor_norm at {t[trind]+40.:.3f}s')
-plt.plot(Rmid, vals[trind],'r', label=f'on R midplane at {eq.t[tind]:.3f}s')
-#plt.xlabel('eV')
-plt.legend()
-plt.show()
+#TRANSP convention: time_JET = 40. + time_TRANSP
+    trind = np.abs(tr.t+40-time).argmin()
+    print(f'x.shape: {x.shape}')
+    print(f't.shape: {t.shape}')
+    Rmid = rhot_to_RZ_midplane(tr.x[trind], eq, time)
 
-ne = tr.profile('NE') 
+if args.plot and (runID is not None):
+    plt.title(f'{pulse} TRANSP {runID} {sig} on {args.dda}/{args.uid}/{args.sequence} at {time}s')
+    #plt.plot(tr.x[trind], vals[trind], label=f'on rhot at {t[trind]+40.:.3f}s')
+    #plt.plot(tr.x[trind]**2, ti[trind], 'g', label=f'on ftor_norm at {t[trind]+40.:.3f}s')
+    plt.plot(Rmid, vals[trind],'r', label=f'on R midplane at {eq.t[tind]:.3f}s')
+    #plt.xlabel('eV')
+    #plt.legend()
 
-if args.save: 
+if args.plot:
+    plt.legend()
+    plt.show()
+
+#ne = tr.profile('NE') 
+
+
+
+if args.save and (runID is not None): 
     outfile = f"tmp/{pulse}_{runID}_{sig}_at_{40+tr.t[trind]:.2f}s_profile.txt"
 
     data = np.column_stack([tr.x[trind], Rmid, vals[trind]])
@@ -690,4 +715,13 @@ if args.save:
                   f'    rhot          Rmid           {sig}',
            fmt="%.8e")
 
-
+if args.save and args.hrts:
+    outfile = f"tmp/{pulse}_HRTS_{sig}_jetppf_{hrts_data['seq']}_at_{t_hrts[tind_hrts]:.3f}s_profile.txt"
+    data = np.column_stack([Rmid_hrts[xmask_hrts],data_hrts[tind_hrts][xmask_hrts], error[tind_hrts][xmask_hrts]])
+    np.savetxt(outfile, data, 
+            header=f"HRTS/jetppf/{hrts_data['seq']} at t={t_hrts[tind_hrts]:.3f}s\n"
+                   f'Remapped onto normaliazed midplane r/a (LFS) using {eq.pulse}/{args.dda}/{args.uid}/{args.sequence}\n'
+                   f'At t={eq.t[tind]:.3f}s Rmag={eq.Rmag[tind]:.3f}m, Zmag={eq.Zmag[tind]:.3f}m\n'
+                   f'R of separatrix at the midplane is Rbnd={Rbnd_at_midplane(eq, time):.3f}m\n'
+                   f'    Rmid           {sig}       error',
+            fmt="%8e")

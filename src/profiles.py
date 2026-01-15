@@ -3,7 +3,7 @@ import ppf
 import matplotlib.pyplot as plt
 import numpy as np
 import f90nml
-from scipy.interpolate import interp1d 
+from scipy.interpolate import interp1d, griddata
 import sys
 import os
 import plotWindow as pw
@@ -545,7 +545,9 @@ class Exp:
             x = self._eq.RZ_to_rhot(self._t1 + 40.0, np.array([x_z, data_z]))
             self._data_dict[key] = {}
             self._data_dict[key]['data'] = (data, x, t)
-            self._data_dict[key]['z'] = (data_z, x_z, t_z)
+            self._data_dict[key]['r'] = x_z
+            self._data_dict[key]['z'] = data_z#(data_z, x_z, t_z)
+            self._data_dict[key]['t'] = t_z
             self._data_dict[key]['error'] = (data_error, x_err, t_err)
             self._data_dict[key]['units'] = (dunits, xunits, tunits)
             self._data_dict[key]['seq'] = sequence
@@ -562,6 +564,8 @@ class Exp:
             data_dict['units'] = self._data_dict[key]['units']
         if 'z_values' in options:
             data_dict['z'] = self._data_dict[key]['z']
+        if 'seq' in options:
+            data_dict['seq'] = self._data_dict[key]['seq']
         return data_dict
 
     def plot(self, axis, t1, dda=None, dty=None, uid='jetppf', seq=0, range=None):
@@ -752,7 +756,7 @@ class Eq():
         RZ = RZ.T if RZ.shape[0] == 2 else RZ if RZ.shape[1] == 2 else np.nan * np.ones((2))
         ix_t1 = (np.abs(self._t - t1)).argmin()
         size_efit_psirzmg = np.product(self._psirzmg[0].shape)
-        rho_pol_on_RZ = scipy.interpolate.griddata(
+        rho_pol_on_RZ = griddata(
             (np.reshape(self._psirzmg[0], (size_efit_psirzmg,)), np.reshape(self._psirzmg[1], (size_efit_psirzmg,))),
             np.reshape(self._sqrt_psi_norm[ix_t1, :], (size_efit_psirzmg,)),
             RZ,
