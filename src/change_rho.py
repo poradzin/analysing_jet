@@ -631,7 +631,7 @@ def rhop_to_RZ_midplane(rhop_in, eq, time, norm=True,method='cubic'):
         Rpts_out = Rpts
 
     return Rpts_out
-
+#######################################################################################################
 args = parse_arguments()  
 
 pulse = args.pulse 
@@ -662,11 +662,12 @@ if args.hrts and args.plot:
     plt.errorbar(Rmid_hrts[xmask_hrts],data_hrts[tind_hrts][xmask_hrts], yerr=error[tind_hrts][xmask_hrts],
             fmt='o',
             color='b',
-            label=f"HRTS/jetppf/{hrts_data['seq']} at {t_hrts[tind_hrts]:.3f}s"
+            label=f"HRTS/jetppf/{hrts_data['seq']} at {t_hrts[tind_hrts]:.3f}s",
+            zorder=1
            )
     #plt.errorbar(x_hrts[x_h_mask],data_hrts[tind_hrts][x_h_mask], yerr=error[tind_hrts][x_h_mask],fmt='o', color='b')
-    plt.ylim(0,1.1*np.max(data_hrts[tind_hrts][xmask]))
-    #plt.show()
+    plt.ylim(0,1.1*np.max(data_hrts[tind_hrts][xmask_hrts]))
+
 
 tind = np.abs(eq.t-time).argmin()
 print(f'Eq tind = {tind}') 
@@ -680,6 +681,8 @@ zpts = eq.Zmag[tind]* np.ones(100)
 if runID is not None:
     tr=ps.Transp(pulse,runID)
     (t,x,vals) = (tr.t,tr.x,tr.profile(sig))
+    if sig in ['NE']:# rescal to SI units
+        vals=vals*1e6
 
 #TRANSP convention: time_JET = 40. + time_TRANSP
     trind = np.abs(tr.t+40-time).argmin()
@@ -691,7 +694,7 @@ if args.plot and (runID is not None):
     plt.title(f'{pulse} TRANSP {runID} {sig} on {args.dda}/{args.uid}/{args.sequence} at {time}s')
     #plt.plot(tr.x[trind], vals[trind], label=f'on rhot at {t[trind]+40.:.3f}s')
     #plt.plot(tr.x[trind]**2, ti[trind], 'g', label=f'on ftor_norm at {t[trind]+40.:.3f}s')
-    plt.plot(Rmid, vals[trind],'r', label=f'on R midplane at {eq.t[tind]:.3f}s')
+    plt.plot(Rmid, vals[trind],'r', label=f'on R midplane at {eq.t[tind]:.3f}s',zorder=2)
     #plt.xlabel('eV')
     #plt.legend()
 
