@@ -22,28 +22,8 @@ def parse_arguments():
     parser.add_argument('-prof', '--profile', type=str, default='TI', help="TRANSP output (t,x) signal")
     parser.add_argument('--save', action="store_true", help="Save profile data to text file")
     parser.add_argument('-hrts','--hrts', action='store_true', help='Read HRTS data with seq=hrts_seq')
-    parser.add_argument(
-            '-hrts_seq','--hrts_seq',
-            type=int, 
-            default=0, 
-            help='HRTS sequence number to be read, default=0'
-            )
-    parser.add_argument(
-            '-plot','--plot',
-            action='store_true', 
-            help="Plots created profiles. Output depend on profile requested."
-            )
-    parser.add_argument(
-            '-rz2rhot','--RZ2rhot', 
-            nargs=2, 
-            type=float, 
-            default=None, 
-            help=(
-                'Converts  [R,Z] point to sqrt normalized toroidal flux (rhot).\n'
-                'Based on a given equilibrium.\n'
-                'Example: --RZ2rhot 3.2 0.2485'
-                )
-            )
+    parser.add_argument('-hrts_seq','--hrts_seq',type=int, default=0, help='HRTS sequence number to be read, default=0')
+    parser.add_argument('-plot','--plot', action='store_true', help="Plots created profiles. Output depend on profile requested.")
     return parser.parse_args()
 
 def plot_psi(eq,time,nl=30):
@@ -76,7 +56,7 @@ def plot_psi(eq,time,nl=30):
     plt.show()
 
 def RZ_to_psi(R_pts, Z_pts, eq, time,
-    method='cubic' # interpolation method: 'linear' or 'nearest' or 'cubic' (griddata)
+    method='linear' # interpolation method: 'linear' or 'nearest' or 'cubic' (griddata)
     ):
     """
     Map points (R_pts, Z_pts) onto poloidal flux.
@@ -196,7 +176,7 @@ def RZ_to_psi(R_pts, Z_pts, eq, time,
     return psi_at_pts
 
 def RZ_to_psin(R_pts, Z_pts, eq, time,
-    method='cubic' 
+    method='linear' # interpolation method: 'linear' or 'nearest' or 'cubic' (griddata)
     ):
     """
     Map points (R_pts, Z_pts) onto poloidal flux.
@@ -216,8 +196,7 @@ def RZ_to_psin(R_pts, Z_pts, eq, time,
 
       - R_pts, Z_pts : 1D arrays of points to map (same length)
 
-      - method : interpolation method for RegularGridInterpolator or griddata ('cubic')
-                 'linear' or 'nearest' or 'cubic' (griddata)
+      - method : interpolation method for RegularGridInterpolator or griddata
     
     Returns:
       s : 1D array of sqrt(normalized_flux) in [0,1] (or NaN for failed)
@@ -226,7 +205,6 @@ def RZ_to_psin(R_pts, Z_pts, eq, time,
                'outside' boolean mask, 'nan' boolean mask.
     """
     
-    #input points to be mapps onto psin
     R_pts = np.asarray(R_pts).ravel()
     Z_pts = np.asarray(Z_pts).ravel()
     assert R_pts.shape == Z_pts.shape, "R_pts and Z_pts must have same shape"
@@ -260,22 +238,17 @@ def RZ_to_psin(R_pts, Z_pts, eq, time,
         Rf = Rg.ravel()
         Zf = Zg.ravel()
         psinf = psin.ravel()
-        # check if input points are inside the grid
-        outside = (
-           (R_pts < Rf.min()) | (R_pts > Rf.max()) |
-           (Z_pts < Zf.min()) | (Z_pts > Zf.max())
-        )
-        if np.any(outside):
-            print("WARNING: points outside EFIT grid:", np.where(outside))
+
         # --- Add magnetic axis point ----------------------------------------
         Rmag = eq.Rmag[tind]
         Zmag = eq.Zmag[tind]
-        psin_axis = 0.0  # by definition normalized ψ
+        rho_axis = 0.0  # by definition sqrt(normalized ψ)
     
         Rf2 = np.concatenate([Rf, [Rmag]])
         Zf2 = np.concatenate([Zf, [Zmag]])
-        psinf2 = np.concatenate([psinf, [psin_axis]])
+        psinf2 = np.concatenate([psinf, [rho_axis]])
         # ---------------------------------------------------------------------
+
         # Primary interpolation
         psin_at_pts = griddata(
             (Rf2, Zf2),
@@ -283,16 +256,16 @@ def RZ_to_psin(R_pts, Z_pts, eq, time,
             RZ,
             method='cubic'
         )
+
         # Fallback for NaNs
         if np.any(np.isnan(psin_at_pts)):
-            print(f'RZ_to_psin: NaNs found in remapped points.')
-            psin_at_pts2 = griddata(
+            psin_at_pts = griddata(
                 (Rf2, Zf2),
                 psinf2,
                 RZ,
                 method='linear'
             )
-            psin_at_pts = np.where(np.isnan(psin_at_pts), psin_at_pts2, psin_at_pts)
+            psin_at_pts = np.where(np.isnan(rho_interp), rho_interp2, rho_interp)
     else:
         psin_grid = np.reshape(eq._psi_norm[tind], (nR,nZ))
 
@@ -493,7 +466,7 @@ def psin_to_ftor_norm(pts_psin, eq, time):
     tind = np.abs(eq.t-time).argmin()
     ftor_norm = eq._ftor_norm
     psin = eq._ftor_x
-    f_psin_to_ftor = PchipInterpolator(psin, ftor_norm[tind], extrapolate=True)
+    f_psin_to_ftor = PchipInterpolator(spsin[tind], ftor_norm[tind], extrapolate=True)
     return f_psin_to_ftor(pts_psin)
 
 def psin_to_sqrt_ftor_norm(pts_psin, eq, time):
@@ -503,10 +476,10 @@ def psin_to_sqrt_ftor_norm(pts_psin, eq, time):
     ftor_x: Psin
     """ 
     tind = np.abs(eq.t-time).argmin()
-    sqrt_ftor_norm = eq._sqrt_ftor_norm #2D
-    psin = eq._ftor_x # 1D
+    sqrt_ftor_norm = eq._sqrt_ftor_norm
+    psin = eq._ftor_x
     # PchipInterpolater(x,y)
-    f = PchipInterpolator(psin, sqrt_ftor_norm[tind], extrapolate=True)
+    f = PchipInterpolator(psin[tind], sqrt_ftor_norm[tind], extrapolate=True)
     return f(pts_psin)
 
 def sqrt_ftor_norm_to_psin(pts_rhot, eq, time):
@@ -658,62 +631,6 @@ def rhop_to_RZ_midplane(rhop_in, eq, time, norm=True,method='cubic'):
         Rpts_out = Rpts
 
     return Rpts_out
-
-def RZ_to_rhot(R_pts, Z_pts, eq, time,
-               method='cubic',
-               clip_psin=True,
-               return_intermediate=False):
-    """
-    Convert (R,Z) points directly to rhot = sqrt(normalized toroidal flux).
-
-    Parameters
-    ----------
-    R_pts, Z_pts : array-like
-        Coordinates of points.
-    eq : equilibrium object
-        EFIT/TRANSP equilibrium containing psi and ftor mappings.
-    time : float
-        Requested time (closest equilibrium time is used).
-    method : str, optional
-        Interpolation method passed to RZ_to_psin ('linear', 'nearest', 'cubic').
-    clip_psin : bool, optional
-        Clip psin to [0, 1] before mapping to rhot.
-    return_intermediate : bool, optional
-        If True, also return psin.
-
-    Returns
-    -------
-    rhot : ndarray
-        sqrt(normalized toroidal flux).
-    psin : ndarray, optional
-        Returned only if return_intermediate=True.
-    """
-
-    # --- Step 1: (R,Z) -> psin ---------------------------------------------
-    psin = RZ_to_psin(
-        R_pts=R_pts,
-        Z_pts=Z_pts,
-        eq=eq,
-        time=time,
-        method=method
-    )
-    # --- Optional clipping -------------------------------------------------
-    if clip_psin:
-        psin = np.clip(psin, 0.0, 1.0)
-
-    # --- Step 2: psin -> rhot ----------------------------------------------
-    rhot = psin_to_sqrt_ftor_norm(
-        pts_psin=psin,
-        eq=eq,
-        time=time
-    )
-
-    if return_intermediate:
-        return rhot, psin
-
-    return rhot
-
-
 #######################################################################################################
 args = parse_arguments()  
 
@@ -724,32 +641,7 @@ runID=args.runid
 
 eq=ps.Eq(pulse,dda = args.dda, uid=args.uid,seq=args.sequence)
 dat = ps.Data(pulse, time)
-tind = np.abs(eq.t-time).argmin()
-
-
-#plot_psi(eq,time,nl=30)
-  
-if args.RZ2rhot is not None:
-    rpts, zpts = args.RZ2rhot
-    rpts = np.array([rpts])
-    zpts = np.array([zpts])
-    #rpts = np.linspace(2.988,3.82,10)
-    #zpts = eq.Zmag[tind]* np.ones(10)
-    psin_pts = RZ_to_psin(rpts, zpts, eq, time)
-    rhot = RZ_to_rhot(
-                R_pts=rpts,
-                Z_pts=zpts,
-                eq=eq,
-               time=time,
-                method='cubic'
-            )
-    print(f'Eq time  t[{tind}]={eq.t[tind]:.3f}s') 
-    print(f'Eq Zmag  Zmag[{tind}]={eq.Zmag[tind]:.3f}m')
-    print(f"R = {rpts}, Z = {zpts}: psin={psin_pts}, rhot = {rhot}")
-    
-
-#rpts = np.linspace(2.988,3.82,100)
-#zpts = eq.Zmag[tind]* np.ones(100)
+#ex = ps.Exp(dat, eq)
 
 # if hrts==True then read HRTS data with R and Z. Exclude R<Rmag
 if args.hrts:
@@ -757,9 +649,12 @@ if args.hrts:
     hrts.add_data('HRTS',sig, 'jetppf', args.hrts_seq)
     hrts_data = hrts.get_data('HRTS',sig, 'jetppf', args.hrts_seq, options=['data', 'error','seq'])
     (data_hrts,x_hrts,t_hrts) = hrts_data['data']
+    print(f'shape(data_hrts): {np.shape(data_hrts)}')
+    print(f'shape(x_hrts): {np.shape(x_hrts)}')
     Rmid_hrts = rhot_to_RZ_midplane(x_hrts, eq, time)
     (error,x_err,t_err) = hrts_data['error']
     tind_hrts = np.abs(t_hrts-time).argmin()
+    print(f'shape(t_hrts): {np.shape(t_hrts)}')
     print(f'tind_hrts: t_hrts[{tind_hrts}]={t_hrts[tind_hrts]:.3f}s')
     xmask_hrts = Rmid_hrts<=1.0                                                                          
     x_h_mask = x_hrts<=1.0 
@@ -774,6 +669,10 @@ if args.hrts and args.plot:
     plt.ylim(0,1.1*np.max(data_hrts[tind_hrts][xmask_hrts]))
 
 
+tind = np.abs(eq.t-time).argmin()
+print(f'Eq tind = {tind}') 
+rpts = np.linspace(2.988,3.82,100)
+zpts = eq.Zmag[tind]* np.ones(100)
 
 
 #sys.exit()
@@ -793,7 +692,7 @@ if runID is not None:
 
 if args.plot and (runID is not None):
     plt.title(f'{pulse} TRANSP {runID} {sig} on {args.dda}/{args.uid}/{args.sequence} at {time}s')
-    plt.plot(tr.x[trind], vals[trind], label=f'on rhot at {t[trind]+40.:.3f}s')
+    #plt.plot(tr.x[trind], vals[trind], label=f'on rhot at {t[trind]+40.:.3f}s')
     #plt.plot(tr.x[trind]**2, ti[trind], 'g', label=f'on ftor_norm at {t[trind]+40.:.3f}s')
     plt.plot(Rmid, vals[trind],'r', label=f'on R midplane at {eq.t[tind]:.3f}s',zorder=2)
     #plt.xlabel('eV')
@@ -824,7 +723,7 @@ if args.save and args.hrts:
     data = np.column_stack([Rmid_hrts[xmask_hrts],data_hrts[tind_hrts][xmask_hrts], error[tind_hrts][xmask_hrts]])
     np.savetxt(outfile, data, 
             header=f"HRTS/jetppf/{hrts_data['seq']} at t={t_hrts[tind_hrts]:.3f}s\n"
-                   f'Remapped onto normalized midplane r/a (LFS) using {eq.pulse}/{args.dda}/{args.uid}/{args.sequence}\n'
+                   f'Remapped onto normaliazed midplane r/a (LFS) using {eq.pulse}/{args.dda}/{args.uid}/{args.sequence}\n'
                    f'At t={eq.t[tind]:.3f}s Rmag={eq.Rmag[tind]:.3f}m, Zmag={eq.Zmag[tind]:.3f}m\n'
                    f'R of separatrix at the midplane is Rbnd={Rbnd_at_midplane(eq, time):.3f}m\n'
                    f'    Rmid           {sig}       error',

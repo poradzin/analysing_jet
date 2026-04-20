@@ -273,7 +273,7 @@ class QProfileGUI:
                 for time in time_slices:
                     ti = np.abs(eq.t - time).argmin() if plot_type == 'Profile' else np.abs(eq.rntf - time).argmin(axis=1)
                     if plot_type == 'Profile':
-                        ax.plot(eq.rntf[ti, :], eq.Q()[ti, :], label=f"{pulse}/{dda}/{uid}/{seq}, t={time}")
+                        ax.plot(eq.rntf[ti, :], eq.Q()[ti, :], label=f"{pulse}/{dda}/{uid}/{seq}, t={eq.t[ti]:.3f}")
                     elif plot_type == 'Time Trace':
                         q = np.array([eq.Q()[i, ti[i]] for i in range(len(ti))])
                         ax.plot(eq.t, q, label=f"{pulse}/{dda}/{uid}/{seq}, X={time}")
