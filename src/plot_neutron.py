@@ -96,12 +96,14 @@ ax.plot(neutrons.transp_time+40,
         linewidth=2,
         label='total'
         )
+has_beam = neutrons.transp('BTNTS') is not None
 ax.plot(neutrons.transp_time+40,
         neutrons.transp('NEUTX'),
         color = 'orange',
         linewidth=2,
+        linestyle = '--' if not has_beam else '-',
         label='thermal')
-if neutrons.transp('BTNTS') is not None:
+if has_beam:
     ax.plot(neutrons.transp_time+40,
             neutrons.transp('BTNTS'),
             color = 'blue',
