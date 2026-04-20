@@ -101,17 +101,20 @@ ax.plot(neutrons.transp_time+40,
         color = 'orange',
         linewidth=2,
         label='thermal')
-ax.plot(neutrons.transp_time+40,
-        neutrons.transp('BTNTS'),
-        color = 'blue',
-        linewidth=2,
-        label='beam-target'
-        )
-ax.plot(neutrons.transp_time+40,
-        neutrons.transp('BBNTS'),
-        color = 'green', 
-        linewidth=2,
-        label='beam-beam')
+if neutrons.transp('BTNTS') is not None:
+    ax.plot(neutrons.transp_time+40,
+            neutrons.transp('BTNTS'),
+            color = 'blue',
+            linewidth=2,
+            label='beam-target'
+            )
+if neutrons.transp('BBNTS') is not None:
+    ax.plot(neutrons.transp_time+40,
+            neutrons.transp('BBNTS'),
+            color = 'green',
+            linewidth=2,
+            label='beam-beam'
+            )
 
 #ax.plot(neutrons.transp_time+40, neutrons_th,color = 'gold',linewidth=2, label='RNT - beam')
 #ax.plot(time_av,data_av,color='purple', linewidth=3)
@@ -228,7 +231,8 @@ if args.add_strap:
 ax.set_title(f'{neutrons.transpcid} Thermal, beam-target ratio to total. ')
 
 ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('NEUTT')),color='orange',linewidth=2, label="TH/TOT")
-ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('BTNTS'),neutrons.transp('NEUTT')),color='blue',linewidth=2, label="BT/TOT")
+if neutrons.transp('BTNTS') is not None:
+    ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('BTNTS'),neutrons.transp('NEUTT')),color='blue',linewidth=2, label="BT/TOT")
 
 ax.set_xlabel('time [s]')
 #ax.set_ylabel(r'$s^{-1}$')
@@ -252,8 +256,8 @@ if args.add_strap:
 
 ax.set_title(f'{neutrons.transpcid} TH/BT ratio ')
 
-ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('BTNTS')),color='blue',linewidth=2, label="TH/BT")
-#ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('BTNTS'),neutrons.transp('NEUTT')),color='blue',linewidth=2, label="BT/TOT")
+if neutrons.transp('BTNTS') is not None:
+    ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('BTNTS')),color='blue',linewidth=2, label="TH/BT")
 
 ax.set_xlabel('time [s]')
 #ax.set_ylabel(r'$s^{-1}$')
@@ -302,8 +306,10 @@ if args.add_hstrap:
     ax.axhspan(ymin, ymax, color=args.strap_color, alpha=args.strap_alpha)
 
 
-ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('BTNTS')),color='blue',linewidth=2, label="TH/BT average")
-ax.plot(neutrons.transp_time+40,thbt(neutrons,bnd),color='red',linewidth=2, label=r"TH/BT ($\rho<$"+f"{bnd})")
+if neutrons.transp('BTNTS') is not None:
+    ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('NEUTX'),neutrons.transp('BTNTS')),color='blue',linewidth=2, label="TH/BT average")
+if neutrons.check_signal('BTNTX'):
+    ax.plot(neutrons.transp_time+40,thbt(neutrons,bnd),color='red',linewidth=2, label=r"TH/BT ($\rho<$"+f"{bnd})")
 #ax.plot(neutrons.transp_time+40,safe_divide(neutrons.transp('BTNTS'),neutrons.transp('NEUTT')),color='blue',linewidth=2, label="BT/TOT")
 
 ax.set_xlabel('time [s]')
