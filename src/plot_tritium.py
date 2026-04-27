@@ -10,6 +10,8 @@ parser.add_argument('pulse', type=int)
 parser.add_argument('runid', type=str)
 parser.add_argument('-t', '--time', type=float, default=None,
                     help='Time slice for profile plots [s]. Default: last time slice.')
+parser.add_argument('-nf', '--no_fast', action='store_true',
+                    help='Also plot NT/(NT+ND) profile without fast ion density.')
 args = parser.parse_args()
 
 pulse = args.pulse
@@ -196,7 +198,14 @@ if profs.signal('NT'):
     fig.suptitle(f'NT/(NT+ND+BDENS) profile', fontsize=13)
     ax = fig.add_subplot(111)
     ax.set_title(f'{profs.transpcid}  t = {t_slice:.3f} s')
-    ax.plot(profs.x[t_idx], frac_prof * 100, color='k', linewidth=2)
+    label_full = r'$n_T/(n_T+n_D+n_{beam})$' if args.no_fast else None
+    ax.plot(profs.x[t_idx], frac_prof * 100, color='k', linewidth=2, label=label_full)
+    if args.no_fast:
+        denom_th = nt_prof + nd_prof
+        frac_th  = np.where(denom_th > 0, nt_prof / denom_th, 0.0)
+        ax.plot(profs.x[t_idx], frac_th * 100, color='k', linewidth=2,
+                linestyle='dashed', label=r'$n_T/(n_T+n_D)$')
+        ax.legend()
     ax.set_xlabel(r'$\rho$')
     ax.set_ylabel(r'$n_T\,/\,(n_T+n_D+n_{beam})$ [%]')
     win.addPlot('NT/(NT+ND+BDENS) profile', fig)
