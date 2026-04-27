@@ -1,0 +1,257 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+
+\geometry{margin=2.5cm}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{gray!10},
+    frame=single,
+    breaklines=true,
+    columns=fullflexible,
+    xleftmargin=0.5cm,
+    xrightmargin=0.5cm,
+}
+
+\title{Bayesian Comparison of TRANSP Runs against \\ Neutron Rate and TH/BT Measurements}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+The script \texttt{bayes\_compare.py} ranks a set of TRANSP runs (different
+tritium profiles, same pulse) by how well their predictions match two
+experimental observables:
+
+\begin{itemize}
+    \item the total neutron rate measured by the fission chamber
+          (\textsc{TIN/RNT});
+    \item the TH/BT ratio (thermal over beam-target neutron rate) inferred
+          from neutron spectroscopy.
+\end{itemize}
+
+Each run is treated as a discrete hypothesis $M_i$ and assigned a posterior
+probability under a uniform prior. The output is a posterior distribution
+over the supplied runs, plus the most likely one.
+
+\section{Bayesian Framework}
+
+\subsection{Posterior, prior, likelihood}
+
+Bayes' theorem gives the posterior probability of run $M_i$ given the data
+$\mathbf{d}$:
+\begin{equation}
+    P(M_i \mid \mathbf{d}) \;=\;
+    \frac{P(\mathbf{d} \mid M_i)\, P(M_i)}{P(\mathbf{d})}.
+\end{equation}
+With a flat prior over the $N$ supplied runs,
+$P(M_i) = 1/N$, and the marginal likelihood $P(\mathbf{d})$ is just a
+normalisation constant. The posterior is therefore proportional to the
+likelihood:
+\begin{equation}
+    P(M_i \mid \mathbf{d}) \;\propto\; \mathcal{L}(\mathbf{d} \mid M_i).
+\end{equation}
+
+\subsection{Gaussian likelihood}
+
+The two measurements are assumed independent and Gaussian-distributed
+around the model predictions:
+\begin{equation}
+    \mathcal{L}(\mathbf{d} \mid M_i)
+      \;=\;
+      \prod_{j \in \{\text{RNT},\,\text{TH/BT}\}}
+      \frac{1}{\sqrt{2\pi \sigma_j^2}}
+      \exp\!\left[
+          -\frac{1}{2} \left( \frac{d_j - m_{i,j}}{\sigma_j} \right)^{\!2}
+      \right].
+\end{equation}
+Taking the logarithm and dropping the additive constant that is common to
+all $M_i$:
+\begin{equation}
+    \log \mathcal{L}_i \;=\; -\tfrac{1}{2}\,\chi_i^2,
+    \qquad
+    \chi_i^2 \;=\;
+        \left( \frac{\Delta\text{NEUTT}_i}{\sigma_{\text{RNT}}} \right)^{\!2}
+        +
+        \left( \frac{\Delta(\text{TH/BT})_i}{\sigma_{\text{TH/BT}}} \right)^{\!2},
+    \label{eq:chi2}
+\end{equation}
+where $\Delta X_i = \langle X \rangle_i^{\text{TRANSP}} - X^{\text{meas}}$.
+
+\subsection{Posterior probabilities}
+
+Combining the equal-prior assumption with~\eqref{eq:chi2}:
+\begin{equation}
+    P(M_i \mid \mathbf{d})
+      \;=\;
+      \frac{\exp(\log \mathcal{L}_i)}
+           {\sum_{k=1}^{N} \exp(\log \mathcal{L}_k)}.
+    \label{eq:posterior}
+\end{equation}
+This is a softmax over the log-likelihoods. For numerical stability the
+script subtracts $\max_k \log \mathcal{L}_k$ from every $\log \mathcal{L}_i$
+before exponentiating; this leaves the ratio unchanged but keeps the
+exponents bounded.
+
+\section{Implementation Details}
+
+\subsection{Time averaging}
+
+Predictions and measurement are compared as time-averages over a
+user-supplied window $[t_1, t_2]$ that should fall on a quasi-stationary
+phase of the discharge. For a TRANSP signal $X(t)$ on a non-uniform
+time grid the average is
+\begin{equation}
+    \langle X \rangle
+      \;=\;
+      \frac{\sum_{t_n \in [t_1, t_2]} X(t_n)\, \Delta t_n}
+           {\sum_{t_n \in [t_1, t_2]} \Delta t_n},
+\end{equation}
+using the time weights $\Delta t_n$ already provided by the
+\texttt{Transp} class (a trapezoidal-style quadrature). For the RNT signal
+the time grid is regular, so a plain mean is used.
+
+\subsection{TH/BT ratio}
+
+For each run the predicted TH/BT is computed as the ratio of
+time-averages,
+\begin{equation}
+    (\text{TH/BT})_i \;=\;
+        \frac{\langle \text{NEUTX} \rangle_i}
+             {\langle \text{BTNTS} \rangle_i},
+\end{equation}
+rather than the time-average of the instantaneous ratio. The two are
+identical when both signals are constant; the ratio of averages is more
+robust when either denominator approaches zero at the boundaries of the
+window, and it more closely matches what an integrating
+spectroscopy diagnostic measures.
+
+\subsection{Uncertainties}
+
+\begin{itemize}
+    \item \textbf{RNT}: relative uncertainty,
+          $\sigma_{\text{RNT}} = \alpha_{\text{RNT}} \cdot \langle \text{RNT} \rangle$,
+          with default $\alpha_{\text{RNT}} = 0.10$.
+    \item \textbf{TH/BT}: absolute uncertainty $\sigma_{\text{TH/BT}}$,
+          default $0.06$ (consistent with a $\pm 10\%$ spectroscopy
+          measurement around $\text{TH/BT} \simeq 0.6$).
+\end{itemize}
+
+\section{Usage}
+
+\subsection{Command line}
+
+\begin{lstlisting}[language=bash]
+./bayes_compare.py 104614 M26 M27 M28 \
+    -tw 51.5 52.5 \
+    --thbt 0.60 \
+    --thbt_sigma 0.06 \
+    --rnt_unc 0.10
+\end{lstlisting}
+
+\subsection{Arguments}
+
+\begin{tabular}{@{}lll@{}}
+\toprule
+Argument                & Type     & Description \\
+\midrule
+\texttt{pulse}              & int      & JET pulse number \\
+\texttt{runs}               & list     & TRANSP run IDs to compare \\
+\texttt{-tw, --time\_window} & 2 floats & Wall-time window $[t_1, t_2]$ in s \\
+\texttt{--thbt}              & float    & Measured TH/BT ratio \\
+\texttt{--thbt\_sigma}       & float    & Absolute $1\sigma$ on TH/BT (default 0.06) \\
+\texttt{--rnt\_unc}          & float    & Relative $1\sigma$ on RNT (default 0.10) \\
+\bottomrule
+\end{tabular}
+
+\subsection{Sample output}
+
+\begin{lstlisting}
+Pulse 104614, time window [51.500, 52.500] s
+
+Measurement:
+  <RNT>  = 1.234e+18 n/s   (sigma = 1.234e+17, 10.0%)
+  TH/BT  = 0.600           (sigma = 0.060)
+
+Run     NEUTT [n/s]     TH/BT     chi2(RNT)   chi2(TH/BT)   log L         P(M|d)
+--------------------------------------------------------------------------------
+M26     1.20e+18        0.55      0.072       0.694         -0.383        29.84%
+M27     1.30e+18        0.62      0.291       0.111         -0.201        35.78%
+M28     1.10e+18        0.58      0.470       0.111         -0.290        34.38%
+
+Most likely: M27  (P = 35.8%)
+\end{lstlisting}
+
+The two $\chi^2$ contributions are printed separately so that the user can
+see which measurement is driving the discrimination.
+
+\section{Caveats}
+
+\subsection{Independence assumption}
+
+The likelihood is factorised under the assumption that the RNT and TH/BT
+measurements are statistically independent. This is reasonable because
+they come from physically distinct diagnostics (fission chamber vs.\
+neutron spectrometer), but if the two diagnostics share a common
+calibration source any correlated systematic would not be captured by the
+diagonal covariance used here. A correlated systematic could be added by
+replacing the sum in~\eqref{eq:chi2} with $\boldsymbol{\Delta}^\top
+\Sigma^{-1} \boldsymbol{\Delta}$, where $\Sigma$ is the full
+$2 \times 2$ covariance matrix.
+
+\subsection{Choice of time window}
+
+The result depends critically on the window $[t_1, t_2]$. The window
+should be chosen to lie entirely within a stationary phase of the
+discharge (typically the flat-top), where the model output and the
+measurement can be averaged meaningfully. Including transient phases
+inflates the apparent disagreement between the runs and the data and
+biases the posterior. If different runs disagree most strongly during a
+specific sub-interval, narrowing the window to that interval increases
+the discriminating power of the analysis.
+
+\subsection{Discrete prior}
+
+The posterior is defined only over the discrete set of runs that the
+user supplies. Two runs receiving similar posterior probabilities does
+\emph{not} mean they are equally good descriptions of reality --- it
+may instead mean that the truth lies somewhere \emph{between} their
+respective tritium profiles, in a region of parameter space not sampled
+by any of the runs. The Bayesian probabilities are conditional on the
+hypothesis that the true model is one of the runs provided.
+
+\subsection{Statistical vs.\ systematic uncertainty}
+
+The default uncertainties are intended to capture the dominant
+systematic component of each diagnostic (calibration, geometric
+factors). Statistical uncertainty in the time-averaged measurement is
+typically smaller and is not added in quadrature here. If the
+diagnostic time series is noisy and the averaging window short, the
+statistical contribution should be evaluated separately and folded in.
+
+\subsection{Sensitivity to single time slices}
+
+Although the script averages over a window, the underlying model
+predictions are still drawn from a single TRANSP simulation per run.
+Differences between runs that are smaller than typical TRANSP-internal
+modelling uncertainties (e.g.\ transport coefficients, recycling, fast
+ion physics) cannot be reliably resolved by this analysis, even if the
+posterior assigns one run a notably higher probability than another.
+
+\end{document}
