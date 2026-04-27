@@ -12,6 +12,8 @@ parser.add_argument('-t', '--time', type=float, default=None,
                     help='Time slice for profile plots [s]. Default: last time slice.')
 parser.add_argument('-nf', '--no_fast', action='store_true',
                     help='Also plot NT/(NT+ND) profile without fast ion density.')
+parser.add_argument('-c', '--compare', nargs='+', default=None, metavar='RUNID',
+                    help='Run IDs to compare against, e.g. -c M27 or -c M27 M28 M29.')
 args = parser.parse_args()
 
 pulse = args.pulse
@@ -19,6 +21,14 @@ runid = args.runid
 profs = ps.Neutrons(pulse, runid)
 profs.get_transp_neutrons()
 profs.add_data('BDENS')
+
+compare_profs = []
+if args.compare:
+    for cid in args.compare:
+        cp = ps.Neutrons(pulse, cid)
+        cp.calculate_concentrations()
+        cp.add_data('BDENS')
+        compare_profs.append(cp)
 
 #Ion_fraction_dda = 'KS3B'
 Ion_fraction_dda = 'KT5P'
@@ -194,17 +204,44 @@ if profs.signal('NT'):
     denom     = nt_prof + nd_prof + bd_prof
     frac_prof = np.where(denom > 0, nt_prof / denom, 0.0)
 
+    compare_colors = ['royalblue', 'tomato', 'forestgreen', 'darkorange', 'purple']
+    show_legend = args.no_fast or bool(compare_profs)
+
+    if compare_profs:
+        solid_label = profs.runid
+        dash_label  = profs.runid + ' (no beam)'
+    else:
+        solid_label = r'$n_T/(n_T+n_D+n_{beam})$' if args.no_fast else None
+        dash_label  = r'$n_T/(n_T+n_D)$'
+
     fig = plt.figure()
     fig.suptitle(f'NT/(NT+ND+BDENS) profile', fontsize=13)
     ax = fig.add_subplot(111)
     ax.set_title(f'{profs.transpcid}  t = {t_slice:.3f} s')
-    label_full = r'$n_T/(n_T+n_D+n_{beam})$' if args.no_fast else None
-    ax.plot(profs.x[t_idx], frac_prof * 100, color='k', linewidth=2, label=label_full)
+    ax.plot(profs.x[t_idx], frac_prof * 100, color='k', linewidth=2, label=solid_label)
     if args.no_fast:
         denom_th = nt_prof + nd_prof
         frac_th  = np.where(denom_th > 0, nt_prof / denom_th, 0.0)
         ax.plot(profs.x[t_idx], frac_th * 100, color='k', linewidth=2,
-                linestyle='dashed', label=r'$n_T/(n_T+n_D)$')
+                linestyle='dashed', label=dash_label)
+
+    for cp, color in zip(compare_profs, compare_colors):
+        if 'NT' not in cp._transp:
+            continue
+        cp_t_idx = int(np.argmin(np.abs(cp.t + 40. - t_slice)))
+        nt_c = cp._transp['NT'][cp_t_idx]
+        nd_c = cp._transp['ND'][cp_t_idx] if 'ND' in cp._transp else np.zeros_like(nt_c)
+        bd_c = cp._transp['BDENS'][cp_t_idx] if 'BDENS' in cp._transp else np.zeros_like(nt_c)
+        denom_c = nt_c + nd_c + bd_c
+        frac_c  = np.where(denom_c > 0, nt_c / denom_c, 0.0)
+        ax.plot(cp.x[cp_t_idx], frac_c * 100, color=color, linewidth=2, label=cp.runid)
+        if args.no_fast:
+            denom_th_c = nt_c + nd_c
+            frac_th_c  = np.where(denom_th_c > 0, nt_c / denom_th_c, 0.0)
+            ax.plot(cp.x[cp_t_idx], frac_th_c * 100, color=color, linewidth=2,
+                    linestyle='dashed', label=cp.runid + ' (no beam)')
+
+    if show_legend:
         ax.legend()
     ax.set_xlabel(r'$\rho$')
     ax.set_ylabel(r'$n_T\,/\,(n_T+n_D+n_{beam})$ [%]')
