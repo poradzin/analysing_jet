@@ -196,7 +196,7 @@ if profs.signal('NT'):
     fig.suptitle(f'NT/(NT+ND+BDENS) profile', fontsize=13)
     ax = fig.add_subplot(111)
     ax.set_title(f'{profs.transpcid}  t = {t_slice:.3f} s')
-    ax.plot(profs.x, frac_prof * 100, color='k', linewidth=2)
+    ax.plot(profs.x[t_idx], frac_prof * 100, color='k', linewidth=2)
     ax.set_xlabel(r'$\rho$')
     ax.set_ylabel(r'$n_T\,/\,(n_T+n_D+n_{beam})$ [%]')
     win.addPlot('NT/(NT+ND+BDENS) profile', fig)
