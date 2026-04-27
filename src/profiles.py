@@ -19,13 +19,10 @@ class Fun():
 
     def there_is_zero(x):
         if isinstance(x, (float,int)):
-            if x == 0.0:
-                return True
+            return x == 0.0
         elif isinstance(x, np.ndarray):
-            if np.any(x == 0.0):
-                return True
-        else: 
-            return False
+            return bool(np.any(x == 0.0))
+        return False
 
 class Data:
     def __init__(self, pulse, time):
@@ -171,12 +168,11 @@ class Transp():
             return False
 
     def check_signal(self, signal):
-        if signal in self._dat_list:          
+        if signal in self._dat_list:
             return True
         else:
             print(f'Signal {signal} not present')
             return False
-        return self.signal(signal)
      
     def find_impurities(self): 
         impurities = []
@@ -223,13 +219,13 @@ class Transp():
                     print(f'{signal_name} not found.')
         return None 
   
-    def get_ind(value, data):
+    def get_ind(self, value, data):
         return np.abs(data - value).argmin()
 
     def profile(self,signal):
         return self.get_key(signal) 
 
-    def taver(tvec):
+    def taver(self, tvec):
         return np.average(tvec,weights=self._dt)
 
     def add_data(self, *args):
@@ -402,7 +398,7 @@ class Neutrons(Densities):
     def rnt(self):
         return (self._RNT_time,self._RNT)
     def rnt_on_transp(self):
-        return self._rnt_on_transp
+        return self._RNT_on_transp
     @property
     def r14(self):
         return (self._R14_time, self._R14)
@@ -632,7 +628,7 @@ class Getexp():
         self._device = device
         self.data = {}
         self.x = {}
-        seld.z = {}
+        self.z = {}
         self.rntf = {}
         self.t = {}
         self.dty = []
@@ -679,6 +675,7 @@ class Eq():
         self._dda = dda
         self._uid = uid
         self._seq = seq
+        self._nriner = None
         self._init_data()
 
 
@@ -791,7 +788,7 @@ class Eq():
             7: lambda time, x: self.rhop_to_rhot(time, x),
             8: lambda time, x: np.sqrt(x),
         }
-        return map[nriner]
+        return map[self._nriner]
     
     def Q(self):
         return self._Q.reshape((len(self._t), len(self._x)))

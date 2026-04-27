@@ -3,12 +3,20 @@ import plotWindow as pw
 import numpy as np
 import matplotlib.pyplot as plt
 import profiles as ps
-import sys
-    
-pulse=int(sys.argv[1])                                                                        
-runid=str(sys.argv[2])                                                                        
-profs = ps.Neutrons(pulse, runid)                                                                
+import argparse
+
+parser = argparse.ArgumentParser(description='Plot tritium concentrations from TRANSP output.')
+parser.add_argument('pulse', type=int)
+parser.add_argument('runid', type=str)
+parser.add_argument('-t', '--time', type=float, default=None,
+                    help='Time slice for profile plots [s]. Default: last time slice.')
+args = parser.parse_args()
+
+pulse = args.pulse
+runid = args.runid
+profs = ps.Neutrons(pulse, runid)
 profs.get_transp_neutrons()
+profs.add_data('BDENS')
 
 #Ion_fraction_dda = 'KS3B'
 Ion_fraction_dda = 'KT5P'
@@ -25,10 +33,10 @@ print(f'np.any(profs.ntnd_av>0): {np.any(profs.ntnd_av>0)}')
 NDoverNTND = f'{1/(1+profs.ntnd_av)*100:.6f}%\n' if np.any(profs.ntnd_av>0) else '0\n'
 print(NDoverNTND)
 text = (
-        r'$\left<\frac{n_T}{n_H+n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.4f}%\n'
+        (r'$\left<\frac{n_T}{n_H+n_D+n_T}\right>=$'+f'{profs.tttd_av*100:.4f}%\n' if profs.tttd_av is not None else '') +
         r'$\left<\frac{n_D}{n_D+n_T}\right>=$'+NDoverNTND+
         #r'$ \left<n_T/n_D\right>=$'+f'{profs.ntnd_av*100:.4f}%\n'
-        r'$ \left<n_T/n_e\right>=$'+f'{profs.ntne_av*100:.4f}%'
+        (r'$ \left<n_T/n_e\right>=$'+f'{profs.ntne_av*100:.4f}%' if profs.ntne_av is not None else '')
        )
 
 print(f'Meff = {Meff}')
@@ -53,7 +61,7 @@ ax.set_title(f'{profs.transpcid} Tritium concentration')
 
 if profs.signal('NT'):
     ax.plot(profs.t+40.,
-            profs.tttd*100, 
+            profs.tttd*100,
             color='k',
             linewidth=2,
             label='nt/(nt+nd+nh)',
@@ -65,13 +73,14 @@ if profs.signal('NT'):
             linestyle=(0,(1,1)),
             label=f'{Ion_fraction_dda}/TTTD',
             )
+    ax.plot(profs.t+40.,profs.ntne*100, color='r',linewidth=2,label='nt/ne',linestyle='dashed')
 if profs.signal('ND'):
     ax.plot(profs.t+40.,profs.dthd*100, color='b',linewidth=2,label='nd/(nt+nd+nh)')
     ax.plot(kt5p.t,kt5p.dthd*100, color='darkorange',linestyle=(0,(1,1)), label=f'{Ion_fraction_dda}/DTHD')
 
-ax.plot(profs.t+40.,profs.ntne*100, color='r',linewidth=2,label='nt/ne',linestyle='dashed')
 ax.set_xlim(profs.t[0]+40,profs.t[-1]+40)
-ax.set_ylim(0., 1.4*np.amax(profs.tttd*100))
+if profs.tttd is not False:
+    ax.set_ylim(0., 1.4*np.amax(profs.tttd*100))
 xleft,xright = ax.get_xlim()
 ymin,ymax=ax.get_ylim()
 ax.set_xlabel('Time [s]')
@@ -168,6 +177,30 @@ ax.text(xleft+0.04*(xright-xleft),(ymax+ymin)/2+0.26*(ymax-ymin),text,fontdict=f
 ax.legend()
                                                                  
 win.addPlot('R_DTDD',fig)
+
+if profs.signal('NT'):
+    t_wall = profs.t + 40.
+    if args.time is not None:
+        t_idx = int(np.argmin(np.abs(t_wall - args.time)))
+    else:
+        t_idx = -1
+    t_slice = t_wall[t_idx]
+
+    nt_prof   = profs._transp['NT'][t_idx]
+    nd_prof   = profs._transp['ND'][t_idx] if profs.signal('ND') else np.zeros_like(nt_prof)
+    bd_prof   = profs._transp['BDENS'][t_idx] if 'BDENS' in profs._transp else np.zeros_like(nt_prof)
+    denom     = nt_prof + nd_prof + bd_prof
+    frac_prof = np.where(denom > 0, nt_prof / denom, 0.0)
+
+    fig = plt.figure()
+    fig.suptitle(f'NT/(NT+ND+BDENS) profile', fontsize=13)
+    ax = fig.add_subplot(111)
+    ax.set_title(f'{profs.transpcid}  t = {t_slice:.3f} s')
+    ax.plot(profs.x, frac_prof * 100, color='k', linewidth=2)
+    ax.set_xlabel(r'$\rho$')
+    ax.set_ylabel(r'$n_T\,/\,(n_T+n_D+n_{beam})$ [%]')
+    win.addPlot('NT/(NT+ND+BDENS) profile', fig)
+
 win.show()
 
 #for key in profs._dat.variables.keys():
