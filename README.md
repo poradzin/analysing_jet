@@ -13,3 +13,13 @@ Relevant source:
 
 - TRANSP RPLOT IEBAL package definition with signs: https://w3.pppl.gov/~xshare/Rplot/nstx_multi.pdf
 - TRANSP output variable table: https://transp.pppl.gov/nml/transp_output.html
+
+## Diffusivity plotting
+
+`src/plot_diffusivity.py` plots TRANSP diffusivity coefficients as radial profiles and time traces.
+
+The default signal list is the core set:
+
+`CONDE`, `DIFB`, `DIFFE`, `DIFFNE`, `DIFWE`, `DEINT`, `CONDI`
+
+The script still accepts `--signals` for the broader diffusivity list from the request.
