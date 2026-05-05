@@ -32,7 +32,9 @@ The script still accepts `--signals` for the broader diffusivity list from the r
 
 The default flux set is:
 
-`DIVFE`, `DIVFI`, `DFIMP`, `DIVFD`
+`DIVFE`, `DIVFI`, `DIVFD`, `DFIMP`
+
+`DFIMP` is plotted on its own tab because its scale is much smaller than the other default fluxes.
 
 Residual checks use:
 

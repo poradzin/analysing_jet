@@ -44,8 +44,12 @@ ALL_PARTICLE_FLUX_TERMS = [
 DEFAULT_PARTICLE_FLUX_TERMS = [
     "DIVFE",
     "DIVFI",
-    "DFIMP",
     "DIVFD",
+    "DFIMP",
+]
+
+IMPURITY_FLUX_TERMS = [
+    "DFIMP",
 ]
 
 RESIDUAL_PROFILE_TERMS = [
@@ -137,9 +141,9 @@ def signed_symlog_threshold(values):
     return max(max_abs * 1e-3, 1e-12)
 
 
-def plot_profile(transp, signals, time_value, pulse, win):
+def plot_profile(transp, signals, time_value, pulse, win, panel_name="particle flux"):
     fig = plt.figure()
-    fig.suptitle(f"{transp.transpcid} particle-flux divergence at t = {time_value:.2f}", fontsize=13)
+    fig.suptitle(f"{transp.transpcid} {panel_name} at t = {time_value:.2f}", fontsize=13)
     ax = fig.add_subplot(111)
 
     unit, factor = get_common_units(transp, signals)
@@ -172,12 +176,12 @@ def plot_profile(transp, signals, time_value, pulse, win):
     cornernote(ax, pulse)
     leg = ax.legend()
     leg.set_draggable(True)
-    win.addPlot(f"particle flux profile @ {time_value:.2f}s", fig)
+    win.addPlot(f"{panel_name} profile @ {time_value:.2f}s", fig)
 
 
-def plot_time_trace(transp, signals, x_pos, pulse, win):
+def plot_time_trace(transp, signals, x_pos, pulse, win, panel_name="particle flux"):
     fig = plt.figure()
-    fig.suptitle(f"{transp.transpcid} particle-flux divergence at x = {x_pos:.2f}", fontsize=13)
+    fig.suptitle(f"{transp.transpcid} {panel_name} at x = {x_pos:.2f}", fontsize=13)
     ax = fig.add_subplot(111)
 
     unit, factor = get_common_units(transp, signals)
@@ -209,7 +213,7 @@ def plot_time_trace(transp, signals, x_pos, pulse, win):
     cornernote(ax, pulse)
     leg = ax.legend()
     leg.set_draggable(True)
-    win.addPlot(f"particle flux time trace @ {x_pos:.2f}", fig)
+    win.addPlot(f"{panel_name} time trace @ {x_pos:.2f}", fig)
 
 
 def plot_residual_profile(transp, signals, time_value, pulse, win):
@@ -316,18 +320,25 @@ def main():
     _, residual_profiles = load_run(args.pulse, args.runid, RESIDUAL_PROFILE_TERMS)
     _, residual_l2 = load_run(args.pulse, args.runid, RESIDUAL_L2_TERMS)
 
-    if not loaded and not residual_profiles and not residual_l2:
+    main_signals = [sig for sig in loaded if sig not in IMPURITY_FLUX_TERMS]
+    impurity_signals = [sig for sig in loaded if sig in IMPURITY_FLUX_TERMS]
+
+    if not main_signals and not impurity_signals and not residual_profiles and not residual_l2:
         print("No requested particle-flux signals were found in this run.")
         return 1
 
     win = pw.plotWindow()
     for time_value in args.time:
-        if loaded:
-            plot_profile(transp, loaded, time_value, args.pulse, win)
+        if main_signals:
+            plot_profile(transp, main_signals, time_value, args.pulse, win, panel_name="particle flux")
+        if impurity_signals:
+            plot_profile(transp, impurity_signals, time_value, args.pulse, win, panel_name="impurity flux")
         if residual_profiles:
             plot_residual_profile(transp, residual_profiles, time_value, args.pulse, win)
-    if loaded:
-        plot_time_trace(transp, loaded, args.xpos, args.pulse, win)
+    if main_signals:
+        plot_time_trace(transp, main_signals, args.xpos, args.pulse, win, panel_name="particle flux")
+    if impurity_signals:
+        plot_time_trace(transp, impurity_signals, args.xpos, args.pulse, win, panel_name="impurity flux")
     if residual_l2:
         plot_residual_l2(transp, residual_l2, args.pulse, win)
     win.show()
