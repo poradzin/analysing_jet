@@ -127,6 +127,16 @@ def get_common_units(transp, signals):
     return (r"$units$", 1.0)
 
 
+def signed_symlog_threshold(values):
+    flat = np.concatenate([np.ravel(np.asarray(v)) for v in values if v is not None]) if values else np.array([])
+    flat = flat[np.isfinite(flat)]
+    flat = flat[flat != 0.0]
+    if flat.size == 0:
+        return 1.0
+    max_abs = np.max(np.abs(flat))
+    return max(max_abs * 1e-3, 1e-12)
+
+
 def plot_profile(transp, signals, time_value, pulse, win):
     fig = plt.figure()
     fig.suptitle(f"{transp.transpcid} particle-flux divergence at t = {time_value:.2f}", fontsize=13)
@@ -134,6 +144,7 @@ def plot_profile(transp, signals, time_value, pulse, win):
 
     unit, factor = get_common_units(transp, signals)
     time_index = gi(transp.t, time_value)
+    plotted = []
 
     for signal in signals:
         data = transp.transp(signal)
@@ -141,16 +152,18 @@ def plot_profile(transp, signals, time_value, pulse, win):
             print(f"Skipping non-profile signal {signal} in profile plot")
             continue
         style = TERM_STYLES.get(signal, {})
+        yvals = data[time_index, :] * factor
+        plotted.append(yvals)
         ax.plot(
             transp.x[time_index, :],
-            data[time_index, :] * factor,
+            yvals,
             color=style.get("color", "tab:blue"),
             linestyle=style.get("linestyle", "-"),
             linewidth=style.get("linewidth", 1.9),
             label=signal,
         )
 
-    ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
+    ax.set_yscale("symlog", linthresh=signed_symlog_threshold(plotted))
     ax.tick_params(axis="both", labelsize=14)
     ax.grid(axis="y", linestyle=":", linewidth=0.8, color="0.8")
     ax.set_xlabel(r"$\rho_{tor}^{norm}$")
@@ -169,6 +182,7 @@ def plot_time_trace(transp, signals, x_pos, pulse, win):
 
     unit, factor = get_common_units(transp, signals)
     x_index = gi(transp.x[0], x_pos)
+    plotted = []
 
     for signal in signals:
         data = transp.transp(signal)
@@ -176,16 +190,18 @@ def plot_time_trace(transp, signals, x_pos, pulse, win):
             print(f"Skipping non-profile signal {signal} in time trace plot")
             continue
         style = TERM_STYLES.get(signal, {})
+        yvals = data[:, x_index] * factor
+        plotted.append(yvals)
         ax.plot(
             transp.t,
-            data[:, x_index] * factor,
+            yvals,
             color=style.get("color", "tab:blue"),
             linestyle=style.get("linestyle", "-"),
             linewidth=style.get("linewidth", 1.9),
             label=signal,
         )
 
-    ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
+    ax.set_yscale("symlog", linthresh=signed_symlog_threshold(plotted))
     ax.tick_params(axis="both", labelsize=14)
     ax.grid(axis="y", linestyle=":", linewidth=0.8, color="0.8")
     ax.set_xlabel("time [s]")
@@ -254,8 +270,7 @@ def plot_residual_l2(transp, signals, pulse, win):
             label=signal,
         )
 
-    ax.axhline(0.0, color="0.3", linewidth=1.0)
-    ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
+    ax.set_yscale("log")
     ax.tick_params(axis="both", labelsize=14)
     ax.grid(axis="y", linestyle=":", linewidth=0.8, color="0.8")
     ax.set_xlabel("time [s]")
