@@ -62,11 +62,10 @@ ALL_DIFFUSIVITY_TERMS = [
 
 DEFAULT_DIFFUSIVITY_TERMS = [
     "CONDE",
-    "DIFB",
-    "DIFFE",
-    "DIFFNE",
-    "DIFWE",
     "CONDI",
+    "DIFFE",
+    "DIFFI",
+    "DIFWE",
 ]
 
 RESIDUAL_TERMS = [

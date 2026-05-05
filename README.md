@@ -20,7 +20,7 @@ Relevant source:
 
 The default signal list is the core set:
 
-`CONDE`, `DIFB`, `DIFFE`, `DIFFNE`, `DIFWE`, `CONDI`
+`CONDE`, `CONDI`, `DIFFE`, `DIFFI`, `DIFWE`
 
 `DEINT` is excluded from the default list because it was zero in the pulses being checked.
 
