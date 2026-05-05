@@ -164,6 +164,7 @@ def plot_profile(transp, signals, time_value, pulse, win):
 
     ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
     ax.tick_params(axis="both", labelsize=14)
+    ax.grid(axis="y", linestyle=":", linewidth=0.8, color="0.8")
     ax.set_xlabel(r"$\rho_{tor}^{norm}$")
     ax.set_ylabel(unit)
     ax.set_xlim(0.0, 1.0)
@@ -198,6 +199,7 @@ def plot_time_trace(transp, signals, x_pos, pulse, win):
 
     ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
     ax.tick_params(axis="both", labelsize=14)
+    ax.grid(axis="y", linestyle=":", linewidth=0.8, color="0.8")
     ax.set_xlabel("time [s]")
     ax.set_ylabel(unit)
     cornernote(ax, pulse)
@@ -231,6 +233,7 @@ def plot_residual_profile(transp, signals, time_value, pulse, win):
     ax.axhline(0.0, color="0.3", linewidth=1.0)
     ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
     ax.tick_params(axis="both", labelsize=14)
+    ax.grid(axis="y", linestyle=":", linewidth=0.8, color="0.8")
     ax.set_xlabel(r"$\rho_{tor}^{norm}$")
     ax.set_ylabel("Residual")
     ax.set_xlim(0.0, 1.0)
