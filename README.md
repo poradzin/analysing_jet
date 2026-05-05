@@ -20,6 +20,8 @@ Relevant source:
 
 The default signal list is the core set:
 
-`CONDE`, `DIFB`, `DIFFE`, `DIFFNE`, `DIFWE`, `DEINT`, `CONDI`
+`CONDE`, `DIFB`, `DIFFE`, `DIFFNE`, `DIFWE`, `CONDI`
 
-The script still accepts `--signals` for the broader diffusivity list from the request.
+`DEINT` is excluded from the default list because it was zero in the pulses being checked.
+
+The script still accepts `--signals` for the broader diffusivity list from the request, and it also adds a residual profile panel using `RESPROFPE`, `RESPROFPI`, `RESPROFTE`, and `RESPROFTI`.

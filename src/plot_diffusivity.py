@@ -4,6 +4,8 @@ Plot TRANSP diffusivity coefficients as profile snapshots and time traces.
 
 The default signal list is the set of TRANSP output variables whose
 descriptions contain "diffusivity", based on the user-supplied list.
+
+A residual panel is included using TRANSP transport-equation residual profiles.
 """
 
 import argparse
@@ -64,8 +66,14 @@ DEFAULT_DIFFUSIVITY_TERMS = [
     "DIFFE",
     "DIFFNE",
     "DIFWE",
-    "DEINT",
     "CONDI",
+]
+
+RESIDUAL_TERMS = [
+    "RESPROFPE",
+    "RESPROFPI",
+    "RESPROFTE",
+    "RESPROFTI",
 ]
 
 DIFFUSIVITY_SET = set(ALL_DIFFUSIVITY_TERMS)
@@ -73,6 +81,13 @@ COLORS = list(plt.get_cmap("tab20").colors)
 TERM_STYLES = {
     signal: {"color": COLORS[idx % len(COLORS)], "linestyle": "-", "linewidth": 1.9}
     for idx, signal in enumerate(ALL_DIFFUSIVITY_TERMS)
+}
+
+RESIDUAL_STYLES = {
+    "RESPROFPE": {"color": "tab:blue", "linestyle": "-", "linewidth": 1.9},
+    "RESPROFPI": {"color": "tab:orange", "linestyle": "-", "linewidth": 1.9},
+    "RESPROFTE": {"color": "tab:green", "linestyle": "-", "linewidth": 1.9},
+    "RESPROFTI": {"color": "tab:red", "linestyle": "-", "linewidth": 1.9},
 }
 
 
@@ -192,6 +207,40 @@ def plot_time_trace(transp, signals, x_pos, pulse, win):
     win.addPlot(f"diffusivity time trace @ {x_pos:.2f}", fig)
 
 
+def plot_residual_profile(transp, signals, time_value, pulse, win):
+    fig = plt.figure()
+    fig.suptitle(f"{transp.transpcid} residuals at t = {time_value:.2f}", fontsize=13)
+    ax = fig.add_subplot(111)
+
+    time_index = gi(transp.t, time_value)
+
+    for signal in signals:
+        data = transp.transp(signal)
+        if data is None or data.ndim != 2:
+            print(f"Skipping non-profile signal {signal} in residual plot")
+            continue
+        style = RESIDUAL_STYLES.get(signal, {})
+        ax.plot(
+            transp.x[time_index, :],
+            data[time_index, :],
+            color=style.get("color", "tab:blue"),
+            linestyle=style.get("linestyle", "-"),
+            linewidth=style.get("linewidth", 1.9),
+            label=signal,
+        )
+
+    ax.axhline(0.0, color="0.3", linewidth=1.0)
+    ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
+    ax.tick_params(axis="both", labelsize=14)
+    ax.set_xlabel(r"$\rho_{tor}^{norm}$")
+    ax.set_ylabel("Residual")
+    ax.set_xlim(0.0, 1.0)
+    cornernote(ax, pulse)
+    leg = ax.legend()
+    leg.set_draggable(True)
+    win.addPlot(f"residual profile @ {time_value:.2f}s", fig)
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="Plot TRANSP diffusivity coefficients as profile and time-trace views."
@@ -224,13 +273,16 @@ def main():
     args = parse_arguments()
 
     transp, loaded = load_run(args.pulse, args.runid, args.signals)
-    if not loaded:
+    _, residuals = load_run(args.pulse, args.runid, RESIDUAL_TERMS)
+    if not loaded and not residuals:
         print("No requested diffusivity signals were found in this run.")
         return 1
 
     win = pw.plotWindow()
     for time_value in args.time:
         plot_profile(transp, loaded, time_value, args.pulse, win)
+        if residuals:
+            plot_residual_profile(transp, residuals, time_value, args.pulse, win)
     plot_time_trace(transp, loaded, args.xpos, args.pulse, win)
     win.show()
     return 0
