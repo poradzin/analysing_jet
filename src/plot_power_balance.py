@@ -1,4 +1,17 @@
 #!/usr/bin/env python
+"""
+Plot TRANSP ion power-balance terms as volume-integrated balance checks.
+
+Signed IEBAL convention used here:
+  +PBTH -GAINI -PCOND +QIE -P0NET -PCONV +QROT +IHEAT +TIBAL
+
+Relevant source:
+  - TRANSP RPLOT IEBAL package definition with signs:
+    https://w3.pppl.gov/~xshare/Rplot/nstx_multi.pdf
+  - TRANSP output variable table:
+    https://transp.pppl.gov/nml/transp_output.html
+"""
+
 import argparse
 import sys
 
@@ -21,6 +34,18 @@ POWER_BALANCE_TERMS = [
     "TIBAL",
 ]
 
+BALANCE_SIGNS = {
+    "PBTH": 1.0,
+    "GAINI": -1.0,
+    "PCOND": -1.0,
+    "QIE": 1.0,
+    "P0NET": -1.0,
+    "PCONV": -1.0,
+    "QROT": 1.0,
+    "IHEAT": 1.0,
+    "TIBAL": 1.0,
+}
+
 TERM_STYLES = {
     "PBTH": {"color": "tab:blue", "linestyle": "-"},
     "GAINI": {"color": "tab:orange", "linestyle": "-"},
@@ -32,6 +57,9 @@ TERM_STYLES = {
     "IHEAT": {"color": "black", "linestyle": "-", "linewidth": 2.4},
     "TIBAL": {"color": "dimgray", "linestyle": "-.", "linewidth": 2.2},
 }
+
+VOLUME_SCALE = 1e-6
+VOLUME_UNIT = "MW"
 
 
 def gi(val, data):
@@ -85,74 +113,171 @@ def get_common_units(transp, signals):
     return (r"$units$", 1.0)
 
 
-def plot_profile(transp, signals, time_value, pulse, win):
+def integrate_volume(transp, signal):
+    data = transp.transp(signal)
+    if data is None:
+        return None
+
+    if data.ndim == 1:
+        return data
+
+    dvol = np.asarray(transp.dvol)
+    if dvol.ndim == 1:
+        dvol = np.broadcast_to(dvol, data.shape)
+    elif dvol.shape != data.shape:
+        dvol = np.broadcast_to(dvol, data.shape)
+
+    return np.nansum(data * dvol, axis=1)
+
+
+def zone_contribution(transp, signal):
+    data = transp.transp(signal)
+    if data is None:
+        return None
+
+    if data.ndim == 1:
+        return data
+
+    dvol = np.asarray(transp.dvol)
+    if dvol.ndim == 1:
+        dvol = np.broadcast_to(dvol, data.shape)
+    elif dvol.shape != data.shape:
+        dvol = np.broadcast_to(dvol, data.shape)
+
+    return data * dvol
+
+
+def get_volume_integrated_series(transp, signals):
+    integrated = {}
+    for signal in signals:
+        series = integrate_volume(transp, signal)
+        if series is not None:
+            integrated[signal] = series
+    return integrated
+
+
+def plot_snapshot(transp, integrated, signals, time_value, pulse, win):
     fig = plt.figure()
-    fig.suptitle(f"{transp.transpcid} power balance at t = {time_value:.2f}", fontsize=13)
+    fig.suptitle(
+        f"{transp.transpcid} volume-integrated power balance at t = {time_value:.2f}",
+        fontsize=13,
+    )
     ax = fig.add_subplot(111)
 
-    unit, factor = get_common_units(transp, signals)
     time_index = gi(transp.t, time_value)
+    values = []
+    labels = []
+    colors = []
+    for signal in signals:
+        if signal not in integrated:
+            continue
+        signed_value = BALANCE_SIGNS.get(signal, 1.0) * integrated[signal][time_index] * VOLUME_SCALE
+        values.append(signed_value)
+        labels.append(signal)
+        colors.append(TERM_STYLES.get(signal, {}).get("color", "tab:blue"))
+
+    ax.barh(labels, values, color=colors, edgecolor="black", linewidth=0.5)
+    ax.axvline(0.0, color="0.3", linewidth=1.0)
+    ax.tick_params(axis="both", labelsize=13)
+    ax.set_xlabel(f"Volume-integrated power [{VOLUME_UNIT}]")
+    closure = float(np.nansum(values))
+    ax.set_title(f"Signed closure = {closure:.3f} {VOLUME_UNIT}", fontsize=11)
+
+    if values:
+        span = max(abs(min(values)), abs(max(values)))
+        if span > 0:
+            ax.set_xlim(-1.15 * span, 1.15 * span)
+
+    cornernote(ax, pulse)
+    win.addPlot(f"power balance @ {time_value:.2f}s", fig)
+
+
+def plot_zone_snapshot(transp, signals, time_value, pulse, win):
+    fig = plt.figure()
+    fig.suptitle(
+        f"{transp.transpcid} zone contributions at t = {time_value:.2f}",
+        fontsize=13,
+    )
+    ax = fig.add_subplot(111)
+
+    time_index = gi(transp.t, time_value)
+    unit = "W"
 
     for signal in signals:
-        data = transp.transp(signal)
-        if data is None:
+        contrib = zone_contribution(transp, signal)
+        if contrib is None:
             continue
         style = TERM_STYLES.get(signal, {})
+        signed_contrib = BALANCE_SIGNS.get(signal, 1.0) * contrib[time_index, :]
         ax.plot(
             transp.x[time_index, :],
-            data[time_index, :] * factor,
+            signed_contrib,
             color=style.get("color", "tab:blue"),
             linestyle=style.get("linestyle", "-"),
             linewidth=style.get("linewidth", 1.8),
             label=signal,
         )
 
+    ax.axhline(0.0, color="0.3", linewidth=1.0)
     ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
     ax.tick_params(axis="both", labelsize=14)
     ax.set_xlabel(r"$\rho_{tor}^{norm}$")
-    ax.set_ylabel(unit)
+    ax.set_ylabel(f"Zone contribution [{unit}]")
     ax.set_xlim(0.0, 1.0)
     cornernote(ax, pulse)
     leg = ax.legend()
     leg.set_draggable(True)
-    win.addPlot(f"power balance profile @ {time_value:.2f}s", fig)
+    win.addPlot(f"zone contributions @ {time_value:.2f}s", fig)
 
 
-def plot_time_trace(transp, signals, x_pos, pulse, win):
+def plot_time_trace(transp, signals, pulse, win):
     fig = plt.figure()
-    fig.suptitle(f"{transp.transpcid} power balance at x = {x_pos:.2f}", fontsize=13)
+    fig.suptitle(f"{transp.transpcid} volume-integrated power balance", fontsize=13)
     ax = fig.add_subplot(111)
 
-    unit, factor = get_common_units(transp, signals)
-    x_index = gi(transp.x[0], x_pos)
+    integrated = get_volume_integrated_series(transp, signals)
 
     for signal in signals:
-        data = transp.transp(signal)
-        if data is None:
+        if signal not in integrated:
             continue
         style = TERM_STYLES.get(signal, {})
+        signed_series = BALANCE_SIGNS.get(signal, 1.0) * integrated[signal] * VOLUME_SCALE
         ax.plot(
             transp.t,
-            data[:, x_index] * factor,
+            signed_series,
             color=style.get("color", "tab:blue"),
             linestyle=style.get("linestyle", "-"),
             linewidth=style.get("linewidth", 1.8),
-            label=signal,
+            label=f"{'+' if BALANCE_SIGNS.get(signal, 1.0) > 0 else '-'}{signal}",
         )
 
+    closure = np.zeros_like(transp.t, dtype=float)
+    for signal in signals:
+        if signal in integrated:
+            closure += BALANCE_SIGNS.get(signal, 1.0) * integrated[signal] * VOLUME_SCALE
+    ax.plot(
+        transp.t,
+        closure,
+        color="black",
+        linestyle="--",
+        linewidth=2.2,
+        label="signed sum",
+    )
+
+    ax.axhline(0.0, color="0.3", linewidth=1.0)
     ax.ticklabel_format(axis="y", style="sci", scilimits=(-3, 3))
     ax.tick_params(axis="both", labelsize=14)
     ax.set_xlabel("time [s]")
-    ax.set_ylabel(unit)
+    ax.set_ylabel(f"Power [{VOLUME_UNIT}]")
     cornernote(ax, pulse)
     leg = ax.legend()
     leg.set_draggable(True)
-    win.addPlot(f"power balance time trace @ {x_pos:.2f}", fig)
+    win.addPlot("power balance time trace", fig)
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Plot TRANSP ion power-balance terms as profiles and time traces."
+        description="Plot TRANSP ion power-balance terms as volume-integrated balance checks."
     )
     parser.add_argument("pulse", type=int, help="JET discharge number")
     parser.add_argument("runid", type=str, help="TRANSP run id")
@@ -161,13 +286,7 @@ def parse_arguments():
         type=float,
         nargs="+",
         default=[9.0],
-        help="One or more TRANSP time slices for profile plots (default: 9.0)",
-    )
-    parser.add_argument(
-        "--xpos",
-        type=float,
-        default=0.5,
-        help="Normalized radius for the time-trace plot (default: 0.5)",
+        help="One or more TRANSP time slices for volume-integrated snapshots (default: 9.0)",
     )
     parser.add_argument(
         "--signals",
@@ -186,10 +305,12 @@ def main():
         print("No requested power-balance signals were found in this run.")
         return 1
 
+    integrated = get_volume_integrated_series(transp, loaded)
     win = pw.plotWindow()
     for time_value in args.time:
-        plot_profile(transp, loaded, time_value, args.pulse, win)
-    plot_time_trace(transp, loaded, args.xpos, args.pulse, win)
+        plot_snapshot(transp, integrated, loaded, time_value, args.pulse, win)
+        plot_zone_snapshot(transp, loaded, time_value, args.pulse, win)
+    plot_time_trace(transp, loaded, args.pulse, win)
     win.show()
     return 0
 
