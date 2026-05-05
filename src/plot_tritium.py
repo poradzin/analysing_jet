@@ -243,6 +243,7 @@ if profs.signal('NT'):
 
     if show_legend:
         ax.legend()
+    ax.set_ylim(0,100)
     ax.set_xlabel(r'$\rho$')
     ax.set_ylabel(r'$n_T\,/\,(n_T+n_D+n_{beam})$ [%]')
     win.addPlot('NT/(NT+ND+BDENS) profile', fig)

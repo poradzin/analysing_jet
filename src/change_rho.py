@@ -744,6 +744,7 @@ if args.RZ2rhot is not None:
                 method='cubic'
             )
     print(f'Eq time  t[{tind}]={eq.t[tind]:.3f}s') 
+    print(f'Eq Rmag  Rmag[{tind}]={eq.Rmag[tind]:.3f}m')
     print(f'Eq Zmag  Zmag[{tind}]={eq.Zmag[tind]:.3f}m')
     print(f"R = {rpts}, Z = {zpts}: psin={psin_pts}, rhot = {rhot}")
     
