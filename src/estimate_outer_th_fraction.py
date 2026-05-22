@@ -383,10 +383,21 @@ def main(argv=None):
         time_jet = float(args.time)
 
     thntx_x, dvol_x, x_rhot, trind = get_transp_slice(tr, time_jet)
+
+    # Pick up the native TRANSP units so the printout is unambiguous
+    # (TRANSP is CGS: DVOL in CM**3, THNTX in N/CM3/SEC -> product is n/s).
+    tr.add_data('THNTX', 'DVOL')
+    unit_th = tr.units('THNTX') or ''
+    unit_dv = tr.units('DVOL') or ''
+    # Convert any DVOL-derived volume to m^3 for display only.
+    dvol_to_m3 = 1.0e-6 if 'CM' in unit_dv.upper() else 1.0
+
     print(f'TRANSP slice [{trind}]: t_JET = {t_jet_grid[trind]:.3f} s '
           f'(t_TRANSP = {tr.t[trind]:.3f} s)')
-    print(f'  THNTX(rhot=0) = {thntx_x[0]:.3e}  [n s^-1 m^-3]')
-    print(f'  sum(DVOL)     = {dvol_x.sum():.3e}  [m^3]  (total plasma volume)')
+    print(f'  THNTX units = [{unit_th}],  DVOL units = [{unit_dv}]')
+    print(f'  THNTX(rhot=0) = {thntx_x[0]:.3e}  [{unit_th}]')
+    print(f'  sum(DVOL)     = {dvol_x.sum() * dvol_to_m3:.3e}  '
+          f'[m^3]  (total plasma volume, converted from {unit_dv})')
 
     # ------- Equilibrium ------------------------------------------------
     print(f'Loading equilibrium PPF {args.dda}/{args.uid}/{args.seq} ...')
@@ -424,9 +435,9 @@ def main(argv=None):
     print(f'  w (toroidal width)  = {W_TOROIDAL:.3f} m')
     print(f'  (R, Z) at edge      = ({Rmag:.3f}, {Zmag + R0_CENTRAL:.3f}) m')
     print(f'  rhot at edge        = {rhot_edge:.4f}')
-    print(f'  V_inside (flux vol) = {V_inside:.4e} m^3')
+    print(f'  V_inside (flux vol) = {V_inside * dvol_to_m3:.4e} m^3')
     print(f'  V0_ref = w*pi*r0^2  = {V0_ref:.4e} m^3  (reference cylinder)')
-    print(f'  TH0 (THNTX at axis) = {th0:.4e} n s^-1 m^-3')
+    print(f'  TH0 (THNTX at axis) = {th0:.4e} [{unit_th}]')
     print(f'  C0 = cumsum(THNTX*DVOL) up to rhot_edge = {C0:.4e} n/s')
     print()
     print('--------------------- Outer region ---------------------')
