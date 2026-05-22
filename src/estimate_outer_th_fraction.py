@@ -169,8 +169,10 @@ def remap_profile_on_z(x_rhot, profile_on_x, R, Z, eq, time_jet):
     """Remap a TRANSP profile defined on rhot onto the LOS (R, Z).
 
     Uses ``change_rho.RZ_to_rhot`` to convert each LOS point to rhot, then
-    PCHIP-interpolates the profile from the rhot grid. Points outside the
-    profile range are set to zero (no contribution).
+    PCHIP-interpolates the profile from the rhot grid. The rhot grid is
+    padded with the axis value at rhot=0 and zero at rhot=1 so the LOS
+    point at the magnetic axis (rhot~0) and any point outside the LCFS
+    receive a sensible value instead of NaN.
 
     Returns
     -------
@@ -188,6 +190,17 @@ def remap_profile_on_z(x_rhot, profile_on_x, R, Z, eq, time_jet):
     xs = xs[uniq]
     ys = ys[uniq]
 
+    # Pad the rhot grid so we can evaluate everywhere in [0, 1]:
+    #   * rhot = 0  -> assume the value of the innermost TRANSP zone
+    #     (TRANSP X starts at the first half-cell, never at 0)
+    #   * rhot = 1  -> profile vanishes outside the LCFS
+    if xs[0] > 0.0:
+        xs = np.concatenate(([0.0], xs))
+        ys = np.concatenate(([ys[0]], ys))
+    if xs[-1] < 1.0:
+        xs = np.concatenate((xs, [1.0]))
+        ys = np.concatenate((ys, [0.0]))
+
     f = PchipInterpolator(xs, ys, extrapolate=False)
     out = f(rhot_on_z)
     out = np.where(np.isnan(out), 0.0, out)
@@ -197,15 +210,57 @@ def remap_profile_on_z(x_rhot, profile_on_x, R, Z, eq, time_jet):
 # -----------------------------------------------------------------------------
 # Physics: central vs outer contributions
 # -----------------------------------------------------------------------------
-def central_contribution(th0):
-    """Compute C0 = TH0 * V0 with V0 = w * pi * r0^2 (cylindrical core).
+def central_contribution(x_rhot, thntx_x, dvol_x, Rmag, Zmag, eq, time_jet):
+    """Cumulative volume-integrated thermal-neutron rate inside the central
+    flux surface that the LOS intersects at Z = Zmag + r0.
 
-    The central region is approximated as a small cylinder of poloidal radius
-    r0 = R0_CENTRAL and toroidal extent w = W_TOROIDAL centred on the
-    magnetic axis.
+    Algorithm (as suggested by the user):
+        1.  rhot_edge = rhot at (R = Rmag, Z = Zmag + r0)
+        2.  cum_emis(rhot) = cumsum(THNTX * DVOL) along the TRANSP rhot grid
+        3.  C0 = cum_emis evaluated (interpolated) at rhot_edge
+
+    The result is the *toroidally integrated* emission rate inside the central
+    flux surface, i.e. the full volume integral of THNTX up to rhot_edge.
+    The cylindrical reference volume V0_ref = w * pi * r0^2 and the actual
+    flux-surface volume V_inside are returned for context.
+
+    Returns
+    -------
+    C0          : scalar [n/s]
+    rhot_edge   : scalar - rhot at the edge of the central region
+    V_inside    : scalar [m^3] - flux-surface volume inside rhot_edge
+    V0_ref      : scalar [m^3] - cylindrical reference volume (w * pi * r0^2)
+    cum_emis    : 1D array - cumulative emission along the rhot grid
     """
-    V0 = W_TOROIDAL * np.pi * R0_CENTRAL ** 2
-    return th0 * V0, V0
+    # 1) rhot at the top edge of the central region (R=Rmag, Z=Zmag+r0)
+    rhot_edge = float(RZ_to_rhot(
+        np.array([Rmag]),
+        np.array([Zmag + R0_CENTRAL]),
+        eq, time_jet,
+        method='cubic', clip_psin=True,
+    )[0])
+
+    xs = np.asarray(x_rhot)
+    th = np.asarray(thntx_x)
+    dv = np.asarray(dvol_x)
+
+    # 2) cumulative flux-surface integrals on the TRANSP rhot grid
+    cum_emis = np.cumsum(th * dv)
+    cum_vol = np.cumsum(dv)
+
+    # 3) interpolate to rhot_edge
+    def _interp_at_edge(cum):
+        if rhot_edge <= xs[0]:
+            return float(cum[0])
+        if rhot_edge >= xs[-1]:
+            return float(cum[-1])
+        return float(PchipInterpolator(xs, cum, extrapolate=False)(rhot_edge))
+
+    C0 = _interp_at_edge(cum_emis)
+    V_inside = _interp_at_edge(cum_vol)
+    V0_ref = W_TOROIDAL * np.pi * R0_CENTRAL ** 2
+
+    return C0, rhot_edge, V_inside, V0_ref, cum_emis
 
 
 def outer_contribution(thntx_z, dvol_z, Z, Zmag):
@@ -313,15 +368,17 @@ def main(argv=None):
           f'({args.nz} samples)')
 
     # ------- Remap profiles onto the LOS Z grid -------------------------
+    # (used for the outer integral and for the diagnostic plots; the
+    # central contribution is computed directly on the TRANSP rhot grid.)
     thntx_z, _ = remap_profile_on_z(x_rhot, thntx_x, R, Z, eq, time_jet)
     dvol_z, _ = remap_profile_on_z(x_rhot, dvol_x, R, Z, eq, time_jet)
 
-    # TH0 = THNTX evaluated at Z = ZMAG (which corresponds to rhot = 0).
     iz0 = int(np.argmin(np.abs(Z - Zmag)))
     th0 = float(thntx_z[iz0])
 
     # ------- Central / outer contributions ------------------------------
-    C0, V0 = central_contribution(th0)
+    C0, rhot_edge, V_inside, V0_ref, cum_emis = central_contribution(
+        x_rhot, thntx_x, dvol_x, Rmag, Zmag, eq, time_jet)
     Crest, w_geom, integrand = outer_contribution(thntx_z, dvol_z, Z, Zmag)
 
     total = C0 + Crest
@@ -330,21 +387,24 @@ def main(argv=None):
     # ------- Report -----------------------------------------------------
     print()
     print('-------------------- Central region --------------------')
-    print(f'  r0                 = {R0_CENTRAL:.3f} m')
-    print(f'  w (toroidal width) = {W_TOROIDAL:.3f} m')
-    print(f'  V0 = w*pi*r0^2     = {V0:.4e} m^3')
-    print(f'  TH0 (THNTX at axis)= {th0:.4e} n s^-1 m^-3')
-    print(f'  C0 = TH0 * V0      = {C0:.4e} n/s')
+    print(f'  r0                  = {R0_CENTRAL:.3f} m')
+    print(f'  w (toroidal width)  = {W_TOROIDAL:.3f} m')
+    print(f'  (R, Z) at edge      = ({Rmag:.3f}, {Zmag + R0_CENTRAL:.3f}) m')
+    print(f'  rhot at edge        = {rhot_edge:.4f}')
+    print(f'  V_inside (flux vol) = {V_inside:.4e} m^3')
+    print(f'  V0_ref = w*pi*r0^2  = {V0_ref:.4e} m^3  (reference cylinder)')
+    print(f'  TH0 (THNTX at axis) = {th0:.4e} n s^-1 m^-3')
+    print(f'  C0 = cumsum(THNTX*DVOL) up to rhot_edge = {C0:.4e} n/s')
     print()
     print('--------------------- Outer region ---------------------')
     print(f'  |Z - Zmag| > {R0_CENTRAL:.3f} m,  '
           f'w_geom = w/(2*pi*|Z-Zmag|)')
-    print(f'  Crest              = {Crest:.4e} n/s')
+    print(f'  Crest               = {Crest:.4e} n/s')
     print()
     print('---------------------- Summary -------------------------')
-    print(f'  C0 + Crest         = {total:.4e} n/s')
-    print(f'  f_outer            = {f_outer:.4f}')
-    print(f'  outer fraction     = {100.0 * f_outer:.2f} %')
+    print(f'  C0 + Crest          = {total:.4e} n/s')
+    print(f'  f_outer             = {f_outer:.4f}')
+    print(f'  outer fraction      = {100.0 * f_outer:.2f} %')
 
     if args.plot:
         diagnostic_plots(Z, Zmag, thntx_z, w_geom, integrand,
