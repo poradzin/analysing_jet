@@ -263,6 +263,39 @@ def central_contribution(x_rhot, thntx_x, dvol_x, Rmag, Zmag, eq, time_jet):
     return C0, rhot_edge, V_inside, V0_ref, cum_emis
 
 
+def equivalent_rhot(target, x_rhot, cum_emis):
+    """Find rhot such that ``cumsum(THNTX*DVOL)`` up to that rhot equals
+    *target*.
+
+    Used as a consistency check: if the LOS-based estimate of the central +
+    outer signal is interpreted as a closed-volume integral, this returns
+    the rhot boundary that would reproduce it. If *target* exceeds the
+    full-plasma integral (``cum_emis[-1]``) no such rhot exists inside the
+    LCFS, and NaN is returned together with the (target / total) ratio so
+    the caller can report the over-count.
+
+    Returns
+    -------
+    rhot_eq      : float, rhot in [x_rhot[0], x_rhot[-1]] or NaN
+    total_plasma : float, full-plasma cumulative emission (= cum_emis[-1])
+    """
+    total_plasma = float(cum_emis[-1])
+    xs = np.asarray(x_rhot)
+    cum = np.asarray(cum_emis)
+
+    if target <= cum[0]:
+        return float(xs[0]), total_plasma
+    if target >= total_plasma:
+        return float('nan'), total_plasma
+
+    # Make the (cum, x) pairs strictly monotonic before inverting with PCHIP.
+    keep = np.concatenate(([True], np.diff(cum) > 0))
+    cum_m = cum[keep]
+    xs_m = xs[keep]
+    f_inv = PchipInterpolator(cum_m, xs_m, extrapolate=False)
+    return float(f_inv(target)), total_plasma
+
+
 def outer_contribution(thntx_z, dvol_z, Z, Zmag):
     """Compute Crest, the off-axis contribution to the LOS signal.
 
@@ -405,6 +438,20 @@ def main(argv=None):
     print(f'  C0 + Crest          = {total:.4e} n/s')
     print(f'  f_outer             = {f_outer:.4f}')
     print(f'  outer fraction      = {100.0 * f_outer:.2f} %')
+
+    # ------- Equivalent rhot consistency check --------------------------
+    rhot_eq, total_plasma = equivalent_rhot(total, x_rhot, cum_emis)
+    print()
+    print('------------ Equivalent rhot_bnd check -----------------')
+    print(f'  total plasma cumsum(THNTX*DVOL) = {total_plasma:.4e} n/s')
+    if np.isnan(rhot_eq):
+        ratio = total / total_plasma if total_plasma > 0 else float('nan')
+        print(f'  C0 + Crest exceeds the full-plasma integral '
+              f'(ratio = {ratio:.4f}),')
+        print(f'  so no rhot_bnd inside the LCFS reproduces it.')
+    else:
+        print(f'  rhot_bnd such that cumsum up to it = C0 + Crest: '
+              f'{rhot_eq:.4f}')
 
     if args.plot:
         diagnostic_plots(Z, Zmag, thntx_z, w_geom, integrand,
