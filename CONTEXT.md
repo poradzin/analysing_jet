@@ -1,10 +1,10 @@
 # `estimate_outer_th_fraction.py` — context
 
-`src/estimate_outer_th_fraction.py` estimates the fraction of the thermal
-neutron line-of-sight (LOS) signal that originates **outside** a small
-central plasma volume around the magnetic axis. The goal is to quantify the
-error made when assuming that all thermal neutron signal recorded by a
-vertical LOS comes only from the plasma core.
+`src/neutron/km14/estimate_outer_th_fraction.py` estimates the fraction of
+the thermal neutron line-of-sight (LOS) signal that originates **outside**
+a small central plasma volume around the magnetic axis. The goal is to
+quantify the error made when assuming that all thermal neutron signal
+recorded by a vertical LOS comes only from the plasma core.
 
 ## Inputs
 
