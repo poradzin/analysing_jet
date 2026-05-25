@@ -251,6 +251,53 @@ def integrate_rate(thntx_grid_si, R, Z, w_tor):
     return float(rate), inner_R
 
 
+def toroidal_rate(thntx_grid_si, R, Z):
+    """Toroidally-integrated emission rate over the LOS (R, Z) area.
+
+    Replaces the linear toroidal width with the proper toroidal volume
+    element 2*pi*R, so the result is the full-torus emission from the
+    (R, Z) area covered by the LOS:
+
+        Rate_tor [n/s] = integral over R, Z of  2*pi*R * THNTX(R, Z) dR dZ
+
+    This is the apples-to-apples quantity to compare with the TRANSP
+    flux-surface integral cumsum(THNTX * DVOL).
+    """
+    Rg, _ = np.meshgrid(R, Z, indexing='ij')
+    integrand = thntx_grid_si * (2.0 * np.pi) * Rg
+    inner = np.trapz(integrand, R, axis=0)
+    return float(np.trapz(inner, Z))
+
+
+def cumulative_emission(x_rhot, thntx_x, dvol_x):
+    """Return (xs_sorted, cumsum(THNTX*DVOL)) on the TRANSP rhot grid [n/s].
+
+    Note: THNTX * DVOL has units of n/s regardless of CGS vs SI
+    (N/CM3/SEC * CM**3 = N/SEC), so no conversion is needed.
+    """
+    order = np.argsort(x_rhot)
+    xs = np.asarray(x_rhot)[order]
+    th = np.asarray(thntx_x)[order]
+    dv = np.asarray(dvol_x)[order]
+    return xs, np.cumsum(th * dv)
+
+
+def find_rho_bnd(target, xs, cum_emis):
+    """Find rho_bnd such that cumsum(THNTX*DVOL)|_{rho_bnd} = target.
+
+    Returns (rho_bnd, total_plasma). rho_bnd is NaN if target exceeds the
+    full-plasma cumulative emission cum_emis[-1].
+    """
+    total = float(cum_emis[-1])
+    if target <= cum_emis[0]:
+        return float(xs[0]), total
+    if target >= total:
+        return float('nan'), total
+    keep = np.concatenate(([True], np.diff(cum_emis) > 0))
+    f_inv = PchipInterpolator(cum_emis[keep], xs[keep], extrapolate=False)
+    return float(f_inv(target)), total
+
+
 # -----------------------------------------------------------------------------
 # Diagnostics
 # -----------------------------------------------------------------------------
@@ -272,17 +319,39 @@ def _lcfs_contour(eq, tind_eq):
 
 def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                      eq, tind_eq, pulse, runid, time_jet,
-                     Rmag, Zmag):
+                     Rmag, Zmag, rho_bnd=None):
     """Four-panel diagnostic:
-        (0,0) rhot(R,Z) in LOS region + LCFS overlay
-        (0,1) THNTX(R,Z) in LOS region + LCFS overlay
-        (1,0) Full poloidal LCFS shape with LOS box marked
+        (0,0) rhot(R,Z) in LOS region + LCFS overlay + rho_bnd surface
+        (0,1) THNTX(R,Z) in LOS region + LCFS overlay + rho_bnd surface
+        (1,0) Full poloidal LCFS shape with LOS box and rho_bnd surface
         (1,1) R-integrated emissivity vs Z
     """
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')
     rhot_plot = np.where(inside, rhot, np.nan)
 
     Rb, Zb = _lcfs_contour(eq, tind_eq)
+
+    # Vessel-wide rhot map for the poloidal overview panel (used to draw
+    # the rho_bnd surface across the whole plasma). Masked outside the LCFS
+    # polygon so we don't trace spurious contours in the PFR or vacuum.
+    Rg_n = np.asarray(eq._psirzmg[0])
+    Zg_n = np.asarray(eq._psirzmg[1])
+    psin_native = np.asarray(eq._psi_norm[tind_eq]).reshape(Rg_n.shape)
+    psin_native_clip = np.clip(
+        np.where(np.isnan(psin_native), 1.0, psin_native), 0.0, 1.0
+    )
+    rhot_native = psin_to_sqrt_ftor_norm(
+        psin_native_clip.ravel(), eq, time_jet
+    ).reshape(Rg_n.shape)
+    lcfs_poly = MplPath(np.column_stack([Rb, Zb]))
+    native_mask = lcfs_poly.contains_points(
+        np.column_stack([Rg_n.ravel(), Zg_n.ravel()])
+    ).reshape(Rg_n.shape)
+    rhot_native = np.where(native_mask, rhot_native, np.nan)
+
+    rho_bnd_lbl = (f'rho_bnd = {rho_bnd:.4f}'
+                   if rho_bnd is not None and np.isfinite(rho_bnd)
+                   else 'rho_bnd: N/A')
 
     fig, axes = plt.subplots(2, 2, figsize=(12.0, 11.0))
     fig.suptitle(
@@ -296,10 +365,10 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax1.plot(Rb, Zb, 'w-', lw=1.2, label='LCFS (RBND,ZBND)')
     ax1.contour(Rg, Zg, psin_dense, levels=[1.0],
                 colors='white', linewidths=0.8, linestyles='--')
+    if rho_bnd is not None and np.isfinite(rho_bnd):
+        ax1.contour(Rg, Zg, rhot, levels=[rho_bnd],
+                    colors='magenta', linewidths=1.4)
     ax1.plot([Rmag], [Zmag], 'r+', ms=10, label='axis')
-    ax1.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
-    #ax1.set_xlim(R[0], R[-1])
-    #ax1.set_ylim(Z[0], Z[-1])
     ax1.set_xlim(np.nanmin(Rb)-0.1, np.nanmax(Rb)+0.1)
     ax1.set_ylim(np.nanmin(Zb)-0.1, np.nanmax(Zb)+0.1)
     ax1.set_xlabel('R [m]')
@@ -311,17 +380,26 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax2 = axes[0, 1]
     pc2 = ax2.pcolormesh(Rg, Zg, thntx_grid_si, shading='auto', cmap='inferno')
     fig.colorbar(pc2, ax=ax2, label='THNTX [n/m3/s]')
-    ax2.plot(Rb, Zb, 'c-', lw=1.2)
-    ax2.plot([Rmag], [Zmag], 'w+', ms=10)
+    ax2.plot(Rb, Zb, 'c-', lw=1.2, label='LCFS')
+    if rho_bnd is not None and np.isfinite(rho_bnd):
+        ax2.contour(Rg, Zg, rhot, levels=[rho_bnd],
+                    colors='magenta', linewidths=1.4)
+    ax2.plot([Rmag], [Zmag], 'w+', ms=10, label='axis')
     ax2.set_xlim(np.nanmin(Rb)-0.1, np.nanmax(Rb)+0.1)
     ax2.set_ylim(np.nanmin(Zb)-0.1, np.nanmax(Zb)+0.1)
     ax2.set_xlabel('R [m]')
     ax2.set_ylabel('Z [m]')
-    ax2.set_title('THNTX(R, Z) inside LOS')
+    ax2.set_title(f'THNTX(R, Z) inside LOS   ({rho_bnd_lbl})')
+    ax2.legend(loc='upper right', fontsize=8)
     ax2.set_aspect('equal', adjustable='box')
 
     ax3 = axes[1, 0]
     ax3.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
+    if rho_bnd is not None and np.isfinite(rho_bnd):
+        cs = ax3.contour(Rg_n, Zg_n, rhot_native, levels=[rho_bnd],
+                         colors='magenta', linewidths=1.4)
+        if cs.collections:
+            cs.collections[0].set_label(rho_bnd_lbl)
     ax3.plot([Rmag], [Zmag], 'r+', ms=10, label=f'axis ({Rmag:.3f}, {Zmag:.3f})')
     los_box_R = [R[0], R[-1], R[-1], R[0], R[0]]
     los_box_Z = [Z[0], Z[0], Z[-1], Z[-1], Z[0]]
@@ -411,6 +489,7 @@ def main(argv=None):
     thntx_grid_si = thntx_grid_native * thntx_to_si  # n/m3/s
 
     rate, inner_R = integrate_rate(thntx_grid_si, R, Z, args.wtor)
+    rate_tor = toroidal_rate(thntx_grid_si, R, Z)
 
     # Peak emissivity for a sanity check.
     peak = float(np.nanmax(thntx_grid_si))
@@ -423,6 +502,14 @@ def main(argv=None):
     box_volume = args.wtor * (R[-1] - R[0]) * (Z[-1] - Z[0])
     mean_emis = rate / box_volume if box_volume > 0 else float('nan')
 
+    # ------- Equivalent rho_bnd ----------------------------------------
+    # Match Rate_tor (the toroidally-integrated LOS-region rate) against the
+    # TRANSP cumulative flux-surface integral cumsum(THNTX*DVOL).
+    dvol_all = tr.profile('DVOL')
+    dvol_x = dvol_all[trind] if dvol_all.ndim == 2 else dvol_all
+    xs_sorted, cum_emis = cumulative_emission(x_rhot, thntx_x, dvol_x)
+    rho_bnd, total_plasma = find_rho_bnd(rate_tor, xs_sorted, cum_emis)
+
     # ------- Report -----------------------------------------------------
     print()
     print('-------------------- LOS volume integral --------------------')
@@ -434,13 +521,30 @@ def main(argv=None):
     print(f'  Mean THNTX in box      = {mean_emis:.3e} n/m3/s')
     print()
     print('====================  Rate_LOS  ===========================')
-    print(f'  Rate_LOS = {rate:.4e} n/s')
+    print(f'  Rate_LOS (chord, w_tor={args.wtor:.2f} m) = {rate:.4e} n/s')
+    print(f'  Rate_tor (full torus, same R,Z)   = {rate_tor:.4e} n/s')
+    print(f'  Rate_tor / Rate_LOS               = {rate_tor / rate:.2f}  '
+          f'(expect ~2*pi*R_c/w_tor = {2 * np.pi * 0.5 * (R[0] + R[-1]) / args.wtor:.2f})')
     print('============================================================')
+    print()
+    print('-------------- Equivalent rho_bnd (TRANSP cumvol) --------------')
+    print(f'  Total plasma cumsum(THNTX*DVOL) = {total_plasma:.4e} n/s')
+    print(f'  Rate_tor / total_plasma         = {rate_tor / total_plasma:.4f}'
+          if total_plasma > 0 else
+          '  total_plasma is zero, cannot compute ratio')
+    if np.isnan(rho_bnd):
+        over = rate_tor / total_plasma if total_plasma > 0 else float('nan')
+        print(f'  Rate_tor exceeds the full-plasma integral '
+              f'(ratio = {over:.4f});')
+        print(f'  no rho_bnd inside the LCFS reproduces it.')
+    else:
+        print(f'  rho_bnd such that cumsum(THNTX*DVOL)|_rho_bnd = Rate_tor: '
+              f'{rho_bnd:.4f}')
 
     if args.plot:
         diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
                          inner_R, eq, tind_eq, args.pulse, args.runid,
-                         time_jet, Rmag, Zmag)
+                         time_jet, Rmag, Zmag, rho_bnd=rho_bnd)
 
     return 0
 
