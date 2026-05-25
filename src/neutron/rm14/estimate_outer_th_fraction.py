@@ -35,6 +35,7 @@ The convenience ``key=value`` form (e.g. ``dda='eftp'``) is also accepted.
 """
 
 import sys
+sys.append('../../')
 import argparse
 
 import numpy as np
