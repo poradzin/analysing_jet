@@ -292,8 +292,11 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax1.contour(Rg, Zg, psin_dense, levels=[1.0],
                 colors='white', linewidths=0.8, linestyles='--')
     ax1.plot([Rmag], [Zmag], 'r+', ms=10, label='axis')
-    ax1.set_xlim(R[0], R[-1])
-    ax1.set_ylim(Z[0], Z[-1])
+    ax1.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
+    #ax1.set_xlim(R[0], R[-1])
+    #ax1.set_ylim(Z[0], Z[-1])
+    ax1.set_xlim(np.nanmin(Rb), np.nanmax(Rb))
+    ax1.set_ylim(np.nanmin(Zb), np.nanmax(Zb))
     ax1.set_xlabel('R [m]')
     ax1.set_ylabel('Z [m]')
     ax1.set_title('rhot on LOS grid')
