@@ -23,13 +23,15 @@ chord cross section so the volume element is
 
 Algorithm
 ~~~~~~~~~
-1.  Normalize EFIT ``PSI(PSIR, PSIZ)`` to ``PSIN`` on its native grid
-    (typically 65 x 65) via ``(PSI - FAXS) / (FBND - FAXS)`` -- no
-    interpolation needed since PSI is already there.
-2.  Append the magnetic-axis point ``(RMAG, ZMAG, PSIN=0)`` to make a
-    scattered set that anchors the centre.
-3.  ``griddata`` from this scattered set onto a dense (R, Z) meshgrid
-    (default 100 x 100) covering the LOS extent.
+1.  Take the Eq class's pre-computed ``eq._psirzmg`` and
+    ``eq._psi_norm[tind]`` (already normalized PSIN on the native EFIT
+    grid). They share the same C-order flat layout, so ravel'd
+    coordinates and values pair correctly with no reshape ambiguity.
+2.  Append the magnetic-axis point ``(RMAG, ZMAG, PSIN=0)`` to anchor
+    the centre.
+3.  ``griddata`` cubic from this scattered set onto a dense (R, Z)
+    meshgrid (default 100 x 100) covering the LOS extent; linear
+    fallback for edge NaNs.
 4.  Mask ``PSIN > 1`` as outside the LCFS; clip the rest to [0, 1] and
     map to ``rhot = sqrt(normalized toroidal flux)`` via
     ``psin_to_sqrt_ftor_norm``.
@@ -168,30 +170,28 @@ def build_rz_grid(eq, tind_eq, Rmin, Rmax, nR, nZ, z_margin):
 def map_grid_to_rhot(R, Z, eq, tind_eq, time_jet):
     """Return rhot(R, Z), inside-LCFS mask, and the raw psin map.
 
-    Steps (no R,Z -> psi re-interpolation; PSI is already on its native grid):
-        1. Normalize PSI on (PSIR, PSIZ) to psin = (PSI - FAXS)/(FBND - FAXS).
-        2. Add the magnetic-axis point (RMAG, ZMAG, psin = 0) to make the
-           scattered set anchor the centre exactly.
-        3. griddata cubic onto the dense (R, Z) meshgrid; fall back to
-           linear for any residual NaNs near the edges.
-        4. psin > 1 -> outside LCFS; clip to [0, 1] for rhot mapping.
-        5. psin -> rhot via psin_to_sqrt_ftor_norm (1D PCHIP).
+    Uses the Eq class's pre-computed structures directly so there is no
+    chance of mismatching coordinate ordering with values:
+        * ``eq._psirzmg`` -- meshgrid of (psir, psiz) with default
+          ``indexing='xy'`` so axis 0 = Z, axis 1 = R.
+        * ``eq._psi_norm[tind]`` -- flat 1D array stored in the *same*
+          C-order, so ravel'd coordinates and values pair correctly.
+
+    Algorithm:
+        1. Build scattered (R, Z, psin) from psirzmg + psi_norm; append
+           the magnetic axis (Rmag, Zmag, psin = 0) to anchor the centre.
+        2. griddata cubic onto the dense (R, Z) meshgrid; linear fallback
+           for edge NaNs.
+        3. psin > 1 -> outside LCFS; clip and map to rhot via
+           psin_to_sqrt_ftor_norm.
     """
-    PSIR = np.asarray(eq._psir)
-    PSIZ = np.asarray(eq._psiz)
-    nRe = len(PSIR)
-    nZe = len(PSIZ)
+    Rg_n = np.asarray(eq._psirzmg[0])
+    Zg_n = np.asarray(eq._psirzmg[1])
+    psin_flat = np.asarray(eq._psi_norm[tind_eq]).ravel()
 
-    # PSI on native grid: shape (nRe, nZe), R first.
-    psi_native = np.asarray(eq._psi[tind_eq]).reshape(nRe, nZe)
-    faxs = float(eq._faxs[tind_eq])
-    fbnd = float(eq._fbnd[tind_eq])
-    psin_native = (psi_native - faxs) / (fbnd - faxs)
-
-    Rg_n, Zg_n = np.meshgrid(PSIR, PSIZ, indexing='ij')
     pts_R = np.concatenate([Rg_n.ravel(), [float(eq._Rmag[tind_eq])]])
     pts_Z = np.concatenate([Zg_n.ravel(), [float(eq._Zmag[tind_eq])]])
-    pts_psin = np.concatenate([psin_native.ravel(), [0.0]])
+    pts_psin = np.concatenate([psin_flat, [0.0]])
 
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')  # (nR, nZ)
     query = np.column_stack([Rg.ravel(), Zg.ravel()])
