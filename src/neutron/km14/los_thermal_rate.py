@@ -249,52 +249,93 @@ def integrate_rate(thntx_grid_si, R, Z, w_tor):
 # -----------------------------------------------------------------------------
 # Diagnostics
 # -----------------------------------------------------------------------------
+def _lcfs_contour(eq, tind_eq):
+    """Return (Rbnd, Zbnd) at tind_eq using the correct time-first indexing.
+
+    profiles.py reshapes RBND/ZBND with ``(-1, n_t)`` but the array actually
+    ends up shaped ``(n_t, n_bnd)`` (confirmed empirically: on pulse 104614
+    only ``_Zbnd[tind, :]`` gives the expected ~[-1.37, 1.68] range, while
+    ``_Zbnd[:, tind]`` returns a single bnd point sampled across the
+    discharge). The LCFS may be padded with zeros at unused slots, so we
+    drop the trailing (0, 0) entries.
+    """
+    Rb = np.asarray(eq._Rbnd[tind_eq, :], dtype=float)
+    Zb = np.asarray(eq._Zbnd[tind_eq, :], dtype=float)
+    valid = ~((Rb == 0.0) & (Zb == 0.0)) & ~np.isnan(Rb) & ~np.isnan(Zb)
+    return Rb[valid], Zb[valid]
+
+
 def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                      eq, tind_eq, pulse, runid, time_jet,
                      Rmag, Zmag):
-    """Three-panel diagnostic: rhot(R,Z), THNTX(R,Z), linear emissivity vs Z.
-
-    The LCFS is drawn from our own dense psin map (contour psin = 1) so the
-    overlay is independent of the ambiguous ZBND axis order in profiles.py.
+    """Four-panel diagnostic:
+        (0,0) rhot(R,Z) in LOS region + LCFS overlay
+        (0,1) THNTX(R,Z) in LOS region + LCFS overlay
+        (1,0) Full poloidal LCFS shape with LOS box marked
+        (1,1) R-integrated emissivity vs Z
     """
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')
     rhot_plot = np.where(inside, rhot, np.nan)
 
-    fig = plt.figure(figsize=(13.0, 6.5))
+    Rb, Zb = _lcfs_contour(eq, tind_eq)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12.0, 11.0))
     fig.suptitle(
         f'KM14 LOS thermal-neutron rate  -  pulse {pulse}  TRANSP {runid}  '
         f't_JET={time_jet:.3f}s  t_EQ={eq.t[tind_eq]:.3f}s'
     )
 
-    ax1 = fig.add_subplot(1, 3, 1)
+    ax1 = axes[0, 0]
     pc1 = ax1.pcolormesh(Rg, Zg, rhot_plot, shading='auto', cmap='viridis')
     fig.colorbar(pc1, ax=ax1, label='rhot')
-    ax1.contour(Rg, Zg, psin_dense, levels=[1.0], colors='white', linewidths=1.0)
+    ax1.plot(Rb, Zb, 'w-', lw=1.2, label='LCFS (RBND,ZBND)')
+    ax1.contour(Rg, Zg, psin_dense, levels=[1.0],
+                colors='white', linewidths=0.8, linestyles='--')
     ax1.plot([Rmag], [Zmag], 'r+', ms=10, label='axis')
+    ax1.set_xlim(R[0], R[-1])
+    ax1.set_ylim(Z[0], Z[-1])
     ax1.set_xlabel('R [m]')
     ax1.set_ylabel('Z [m]')
-    ax1.set_title('rhot on LOS grid (LCFS = psin=1 contour)')
-    ax1.legend(loc='best', fontsize=8)
+    ax1.set_title('rhot on LOS grid')
+    ax1.legend(loc='upper right', fontsize=8)
     ax1.set_aspect('equal', adjustable='box')
 
-    ax2 = fig.add_subplot(1, 3, 2)
+    ax2 = axes[0, 1]
     pc2 = ax2.pcolormesh(Rg, Zg, thntx_grid_si, shading='auto', cmap='inferno')
     fig.colorbar(pc2, ax=ax2, label='THNTX [n/m3/s]')
-    ax2.contour(Rg, Zg, psin_dense, levels=[1.0], colors='cyan', linewidths=1.0)
+    ax2.plot(Rb, Zb, 'c-', lw=1.2)
     ax2.plot([Rmag], [Zmag], 'w+', ms=10)
+    ax2.set_xlim(R[0], R[-1])
+    ax2.set_ylim(Z[0], Z[-1])
     ax2.set_xlabel('R [m]')
     ax2.set_ylabel('Z [m]')
     ax2.set_title('THNTX(R, Z) inside LOS')
     ax2.set_aspect('equal', adjustable='box')
 
-    ax3 = fig.add_subplot(1, 3, 3)
-    ax3.plot(inner_R, Z, lw=1.4)
-    ax3.set_xlabel(r'$\int$ THNTX dR  [n/m2/s]')
+    ax3 = axes[1, 0]
+    ax3.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
+    ax3.plot([Rmag], [Zmag], 'r+', ms=10, label=f'axis ({Rmag:.3f}, {Zmag:.3f})')
+    los_box_R = [R[0], R[-1], R[-1], R[0], R[0]]
+    los_box_Z = [Z[0], Z[0], Z[-1], Z[-1], Z[0]]
+    ax3.plot(los_box_R, los_box_Z, 'r-', lw=1.0,
+             label=f'LOS box R=[{R[0]:.2f},{R[-1]:.2f}]')
+    ax3.axvline(0.5 * (R[0] + R[-1]), color='r', ls=':', lw=0.8,
+                label=f'LOS centre R={0.5*(R[0]+R[-1]):.2f} m')
+    ax3.set_xlabel('R [m]')
     ax3.set_ylabel('Z [m]')
-    ax3.set_title('R-integrated emissivity vs Z')
-    ax3.axhline(Zmag, color='r', ls='--', lw=0.8, label=f'Zmag={Zmag:.3f} m')
-    ax3.grid(True, ls=':', lw=0.5)
+    ax3.set_title('Poloidal cross-section: LCFS + KM14 LOS')
     ax3.legend(loc='best', fontsize=8)
+    ax3.grid(True, ls=':', lw=0.5)
+    ax3.set_aspect('equal', adjustable='box')
+
+    ax4 = axes[1, 1]
+    ax4.plot(inner_R, Z, lw=1.4)
+    ax4.set_xlabel(r'$\int$ THNTX dR  [n/m2/s]')
+    ax4.set_ylabel('Z [m]')
+    ax4.set_title('R-integrated emissivity vs Z')
+    ax4.axhline(Zmag, color='r', ls='--', lw=0.8, label=f'Zmag={Zmag:.3f} m')
+    ax4.grid(True, ls=':', lw=0.5)
+    ax4.legend(loc='best', fontsize=8)
 
     plt.tight_layout()
     plt.show()
