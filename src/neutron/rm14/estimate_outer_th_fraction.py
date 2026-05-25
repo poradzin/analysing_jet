@@ -34,8 +34,13 @@ Usage
 The convenience ``key=value`` form (e.g. ``dda='eftp'``) is also accepted.
 """
 
+import os
 import sys
-sys.append('../../')
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
+
+sys.path.append(SRC_DIR)
 import argparse
 
 import numpy as np

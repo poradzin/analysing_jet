@@ -44,7 +44,6 @@ ALL_PARTICLE_FLUX_TERMS = [
 DEFAULT_PARTICLE_FLUX_TERMS = [
     "DIVFE",
     "DIVFI",
-    "DIVFD",
     "DFIMP",
 ]
 
