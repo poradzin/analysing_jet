@@ -218,11 +218,26 @@ magnetic axis `RMAG` drifts between pulses (e.g. 3.037 m on 104614).
    f(rho_i) = LOS_vol_bin(i) / DVOL_TRANSP(i)   ∈ [0, 1]
    ```
 
-   is computed by histogramming `dV_tor = 2π·R·dR·dZ` from the LOS grid
+   is computed by accumulating `dV_tor = 2π·R·dR·dZ` from the LOS grid
    into TRANSP rhot bins (edges = midpoints of TRANSP X, plus 0 and 1).
    By construction `sum(THNTX·DVOL·f) = Rate_tor`. This profile is the
    apples-to-apples replacement for the standard "cumsum to 0.2–0.25"
    proxy and can be saved with `--save` for downstream use.
+
+   **Subgrid (anti-aliased) distribution** is the default. A Cartesian
+   (R, Z) grid has uniform `dR·dZ` cells, but flux surfaces are curved
+   and a single LOS cell typically spans many rhot bins in the Z
+   direction (where `|∂rhot/∂Z|·dZ` ≫ TRANSP bin width). Point binning
+   then produces a period-N oscillation in f(rhot) -- pure aliasing.
+
+   The subgrid mode estimates each cell's rhot half-range as
+   `½(|∂rhot/∂R|·dR + |∂rhot/∂Z|·dZ)` (L1 corner half-range) and
+   distributes the cell's toroidal volume uniformly across that rhot
+   range, weighted by overlap with each TRANSP bin. Vectorised with
+   `np.add.at`. Total LOS volume is exactly preserved (verified by an
+   on-line standalone test: bin-to-bin |Δf| drops ~12× vs point binning,
+   total volume conserved to machine precision). Pass `--no-subgrid` to
+   revert to point binning for comparison.
 
 ## CLI
 

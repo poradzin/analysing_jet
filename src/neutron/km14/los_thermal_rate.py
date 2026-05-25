@@ -135,6 +135,10 @@ def parse_args(argv=None):
                         help='Show diagnostic plots.')
     parser.add_argument('--save', action='store_true',
                         help='Save (rhot, THNTX, THKM14, f) profile to tmp/.')
+    parser.add_argument('--no-subgrid', action='store_true',
+                        help='Disable subgrid (R,Z)-cell rhot distribution '
+                             'for f(rhot); use point binning instead. '
+                             'Subgrid is on by default to suppress aliasing.')
     return parser.parse_args(argv)
 
 
@@ -303,34 +307,52 @@ def find_rho_bnd(target, xs, cum_emis):
     return float(f_inv(target)), total
 
 
-def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3):
+def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
+                       subgrid=True):
     """LOS-weighted fraction f(rhot) of each TRANSP flux shell.
 
-    For every (R, Z) cell in the LOS grid we accumulate the toroidal
+    For every (R, Z) cell of the LOS grid we accumulate the toroidal
     volume element ``dV = 2*pi*R*dR*dZ`` (zero outside the LCFS) into
-    histogram bins centred on the TRANSP rhot grid. Then
+    bins centred on the TRANSP rhot grid, then
 
         f(rhot_i) = LOS_vol_bin(i) / DVOL_TRANSP_bin(i)
 
     so ``f`` lies in [0, 1] and ``sum(THNTX * DVOL * f) == Rate_tor`` by
-    construction (modulo trapz/histogram discretization).
+    construction (modulo discretisation).
+
+    Binning modes
+    -------------
+    * ``subgrid=False`` -- point binning: each cell's volume goes to a
+      single bin chosen by its centre rhot. Suffers from aliasing when
+      the rhot change across one (R, Z) cell exceeds one TRANSP bin
+      width (typical for the Z direction at modest nZ).
+    * ``subgrid=True`` (default) -- anti-aliased: each cell spans a rhot
+      range estimated from ``|grad rhot| * cell_size`` (L1 corner half-
+      range). Its volume is distributed uniformly across that range and
+      added to every TRANSP bin proportional to overlap, vectorised via
+      ``np.add.at``. Eliminates the period-N oscillation in f(rhot) and
+      correctly accounts for the mismatch between a rectangular (R, Z)
+      grid and curved flux surfaces.
 
     Parameters
     ----------
-    rhot_los : 2D array, rhot on the LOS (R, Z) grid
-    inside   : 2D bool array, inside-LCFS mask (same shape as rhot_los)
-    R, Z     : 1D LOS grid axes [m]
-    x_rhot   : 1D TRANSP rhot grid (sorted ascending)
+    rhot_los  : 2D array, rhot on the LOS (R, Z) grid
+    inside    : 2D bool array, inside-LCFS mask (same shape)
+    R, Z      : 1D LOS grid axes [m]
+    x_rhot    : 1D TRANSP rhot grid (sorted ascending)
     dvol_x_m3 : 1D TRANSP DVOL converted to m^3 (same shape as x_rhot)
+    subgrid   : bool, see above
 
     Returns
     -------
     f            : 1D weight, shape (len(x_rhot),)
     los_vol_bin  : 1D LOS toroidal volume per TRANSP shell [m^3]
     """
-    dR = np.gradient(np.asarray(R, dtype=float))
-    dZ = np.gradient(np.asarray(Z, dtype=float))
-    Rg, _ = np.meshgrid(R, Z, indexing='ij')
+    R_arr = np.asarray(R, dtype=float)
+    Z_arr = np.asarray(Z, dtype=float)
+    dR = np.gradient(R_arr)
+    dZ = np.gradient(Z_arr)
+    Rg, _ = np.meshgrid(R_arr, Z_arr, indexing='ij')
     cell_vol = np.where(
         inside,
         2.0 * np.pi * Rg * dR[:, None] * dZ[None, :],
@@ -339,9 +361,72 @@ def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3):
 
     xs = np.asarray(x_rhot, dtype=float)
     edges = np.concatenate(([0.0], 0.5 * (xs[:-1] + xs[1:]), [1.0]))
-    los_vol_bin, _ = np.histogram(
-        rhot_los.ravel(), bins=edges, weights=cell_vol.ravel()
-    )
+    n_bins = len(edges) - 1
+
+    if not subgrid:
+        los_vol_bin, _ = np.histogram(
+            rhot_los.ravel(), bins=edges, weights=cell_vol.ravel()
+        )
+    else:
+        # rhot half-extent across the cell (L1 corner half-range)
+        grad_R, grad_Z = np.gradient(rhot_los, R_arr, Z_arr)
+        h_R = 0.5 * np.abs(grad_R) * dR[:, None]
+        h_Z = 0.5 * np.abs(grad_Z) * dZ[None, :]
+        half = h_R + h_Z
+
+        rhot_c = rhot_los.ravel()
+        vol_flat = cell_vol.ravel()
+        half_flat = half.ravel()
+
+        keep = vol_flat > 0.0
+        rhot_c = rhot_c[keep]
+        vol = vol_flat[keep]
+        half_k = half_flat[keep]
+
+        # Clip to [0, 1] so volume isn't spilled outside the physical range.
+        rhot_lo = np.clip(rhot_c - half_k, 0.0, 1.0)
+        rhot_hi = np.clip(rhot_c + half_k, 0.0, 1.0)
+        span = rhot_hi - rhot_lo
+
+        # Which bins each cell touches.
+        i_lo = np.clip(
+            np.searchsorted(edges, rhot_lo, side='right') - 1,
+            0, n_bins - 1,
+        )
+        i_hi = np.clip(
+            np.searchsorted(edges, rhot_hi, side='right') - 1,
+            0, n_bins - 1,
+        )
+        n_per_cell = i_hi - i_lo + 1
+
+        # Build flat (cell, bin) assignment vectors.
+        total = int(n_per_cell.sum())
+        flat_cell = np.repeat(np.arange(len(vol)), n_per_cell)
+        starts = np.concatenate(([0], np.cumsum(n_per_cell[:-1])))
+        within_offset = np.arange(total) - np.repeat(starts, n_per_cell)
+        flat_bin = np.repeat(i_lo, n_per_cell) + within_offset
+
+        cell_lo_b = rhot_lo[flat_cell]
+        cell_hi_b = rhot_hi[flat_cell]
+        cell_span_b = span[flat_cell]
+        cell_vol_b = vol[flat_cell]
+        bin_lo = edges[flat_bin]
+        bin_hi = edges[flat_bin + 1]
+        ovl = np.maximum(
+            0.0,
+            np.minimum(cell_hi_b, bin_hi) - np.maximum(cell_lo_b, bin_lo),
+        )
+        # Cells with zero rhot span -> all volume to their single bin.
+        zero_span = cell_span_b == 0
+        weight = np.where(
+            zero_span,
+            cell_vol_b,
+            cell_vol_b * ovl
+            / np.where(cell_span_b > 0, cell_span_b, 1.0),
+        )
+
+        los_vol_bin = np.zeros(n_bins)
+        np.add.at(los_vol_bin, flat_bin, weight)
 
     dvol = np.asarray(dvol_x_m3, dtype=float)
     with np.errstate(invalid='ignore', divide='ignore'):
@@ -611,7 +696,8 @@ def main(argv=None):
     # ------- LOS-weighted profile THKM14(rhot) -------------------------
     dvol_m3 = dvol_sorted * dvol_to_m3
     f_profile, los_vol_bin = los_shell_fraction(
-        rhot, inside, R, Z, xs_sorted, dvol_m3
+        rhot, inside, R, Z, xs_sorted, dvol_m3,
+        subgrid=not args.no_subgrid,
     )
     thntx_si_profile = thntx_sorted * thntx_to_si      # n/m3/s
     thkm14_si_profile = thntx_si_profile * f_profile   # n/m3/s
@@ -677,11 +763,26 @@ def main(argv=None):
 
     print()
     print('--------------- THKM14(rhot) (LOS-weighted) ----------------')
-    print(f'  f(rhot) = LOS shell volume / TRANSP DVOL  (max f = {f_profile.max():.4f})')
+    print(f'  binning mode = '
+          f'{"subgrid (anti-aliased)" if not args.no_subgrid else "point (raw histogram)"}')
+    print(f'  f(rhot) = LOS shell volume / TRANSP DVOL  '
+          f'(max f = {f_profile.max():.4f})')
     print(f'  sum(THNTX * DVOL * f) = {rate_from_profile:.4e} n/s  '
           f'(Rate_tor = {rate_tor:.4e})')
     print(f'  relative residual     = '
           f'{abs(rate_from_profile - rate_tor) / rate_tor:.2e}')
+    # Volume-conservation diagnostic: total binned LOS volume vs cumulative
+    # LOS box volume should agree (the subgrid splat preserves total mass).
+    Rg_chk, _ = np.meshgrid(R, Z, indexing='ij')
+    dR_chk = np.gradient(R)
+    dZ_chk = np.gradient(Z)
+    total_cell_vol = float(np.where(
+        inside,
+        2.0 * np.pi * Rg_chk * dR_chk[:, None] * dZ_chk[None, :], 0.0,
+    ).sum())
+    print(f'  total LOS volume (cell sum) = {total_cell_vol:.4e} m^3')
+    print(f'  total LOS volume (binned)   = {los_vol_bin.sum():.4e} m^3   '
+          f'(consistency check)')
 
     if args.save:
         outdir = os.path.join(SRC_DIR, 'tmp')
