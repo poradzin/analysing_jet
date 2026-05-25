@@ -133,6 +133,8 @@ def parse_args(argv=None):
                              f'(default {Z_MARGIN_DEFAULT})')
     parser.add_argument('--plot', action='store_true',
                         help='Show diagnostic plots.')
+    parser.add_argument('--save', action='store_true',
+                        help='Save (rhot, THNTX, THKM14, f) profile to tmp/.')
     return parser.parse_args(argv)
 
 
@@ -301,6 +303,53 @@ def find_rho_bnd(target, xs, cum_emis):
     return float(f_inv(target)), total
 
 
+def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3):
+    """LOS-weighted fraction f(rhot) of each TRANSP flux shell.
+
+    For every (R, Z) cell in the LOS grid we accumulate the toroidal
+    volume element ``dV = 2*pi*R*dR*dZ`` (zero outside the LCFS) into
+    histogram bins centred on the TRANSP rhot grid. Then
+
+        f(rhot_i) = LOS_vol_bin(i) / DVOL_TRANSP_bin(i)
+
+    so ``f`` lies in [0, 1] and ``sum(THNTX * DVOL * f) == Rate_tor`` by
+    construction (modulo trapz/histogram discretization).
+
+    Parameters
+    ----------
+    rhot_los : 2D array, rhot on the LOS (R, Z) grid
+    inside   : 2D bool array, inside-LCFS mask (same shape as rhot_los)
+    R, Z     : 1D LOS grid axes [m]
+    x_rhot   : 1D TRANSP rhot grid (sorted ascending)
+    dvol_x_m3 : 1D TRANSP DVOL converted to m^3 (same shape as x_rhot)
+
+    Returns
+    -------
+    f            : 1D weight, shape (len(x_rhot),)
+    los_vol_bin  : 1D LOS toroidal volume per TRANSP shell [m^3]
+    """
+    dR = np.gradient(np.asarray(R, dtype=float))
+    dZ = np.gradient(np.asarray(Z, dtype=float))
+    Rg, _ = np.meshgrid(R, Z, indexing='ij')
+    cell_vol = np.where(
+        inside,
+        2.0 * np.pi * Rg * dR[:, None] * dZ[None, :],
+        0.0,
+    )
+
+    xs = np.asarray(x_rhot, dtype=float)
+    edges = np.concatenate(([0.0], 0.5 * (xs[:-1] + xs[1:]), [1.0]))
+    los_vol_bin, _ = np.histogram(
+        rhot_los.ravel(), bins=edges, weights=cell_vol.ravel()
+    )
+
+    dvol = np.asarray(dvol_x_m3, dtype=float)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        f = np.where(dvol > 0.0, los_vol_bin / dvol, 0.0)
+    f = np.clip(f, 0.0, 1.0)
+    return f, los_vol_bin
+
+
 # -----------------------------------------------------------------------------
 # Diagnostics
 # -----------------------------------------------------------------------------
@@ -322,12 +371,16 @@ def _lcfs_contour(eq, tind_eq):
 
 def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                      eq, tind_eq, pulse, runid, time_jet,
-                     Rmag, Zmag, rho_bnd=None):
-    """Four-panel diagnostic:
-        (0,0) rhot(R,Z) in LOS region + LCFS overlay + rho_bnd surface
-        (0,1) THNTX(R,Z) in LOS region + LCFS overlay + rho_bnd surface
-        (1,0) Full poloidal LCFS shape with LOS box and rho_bnd surface
+                     Rmag, Zmag, rho_bnd=None,
+                     xs=None, thntx_si_prof=None,
+                     thkm14_si_prof=None, f_prof=None):
+    """Six-panel (2x3) diagnostic:
+        (0,0) rhot(R,Z) in LOS region + LCFS + rho_bnd
+        (0,1) THNTX(R,Z) in LOS region + LCFS + rho_bnd
+        (0,2) THNTX(rhot) and THKM14(rhot) profiles
+        (1,0) Full poloidal LCFS with LOS box and rho_bnd surface
         (1,1) R-integrated emissivity vs Z
+        (1,2) LOS weight function f(rhot)
     """
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')
     rhot_plot = np.where(inside, rhot, np.nan)
@@ -356,7 +409,7 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                    if rho_bnd is not None and np.isfinite(rho_bnd)
                    else 'rho_bnd: N/A')
 
-    fig, axes = plt.subplots(2, 2, figsize=(12.0, 11.0))
+    fig, axes = plt.subplots(2, 3, figsize=(17.0, 10.0))
     fig.suptitle(
         f'KM14 LOS thermal-neutron rate  -  pulse {pulse}  TRANSP {runid}  '
         f't_JET={time_jet:.3f}s  t_EQ={eq.t[tind_eq]:.3f}s'
@@ -425,6 +478,39 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax4.axhline(Zmag, color='r', ls='--', lw=0.8, label=f'Zmag={Zmag:.3f} m')
     ax4.grid(True, ls=':', lw=0.5)
     ax4.legend(loc='best', fontsize=8)
+
+    # ---- (0, 2): emissivity profiles --------------------------------
+    ax5 = axes[0, 2]
+    if xs is not None and thntx_si_prof is not None:
+        ax5.plot(xs, thntx_si_prof, 'b-', lw=1.4,
+                 label='THNTX (TRANSP)')
+        ax5.plot(xs, thkm14_si_prof, 'r-', lw=1.4,
+                 label=r'THKM14 = THNTX$\cdot f$')
+        ax5.set_xlabel('rhot')
+        ax5.set_ylabel('Emissivity [n/m3/s]')
+        ax5.set_title('Emissivity profiles vs rhot')
+        if rho_bnd is not None and np.isfinite(rho_bnd):
+            ax5.axvline(rho_bnd, color='m', ls=':', lw=1.0,
+                        label=f'rho_bnd = {rho_bnd:.4f}')
+        ax5.set_xlim(0.0, 1.0)
+        ax5.grid(True, ls=':', lw=0.5)
+        ax5.legend(loc='upper right', fontsize=8)
+
+    # ---- (1, 2): LOS weight function f(rhot) ------------------------
+    ax6 = axes[1, 2]
+    if xs is not None and f_prof is not None:
+        ax6.plot(xs, f_prof, 'g-', lw=1.4)
+        ax6.fill_between(xs, 0.0, f_prof, color='g', alpha=0.15)
+        ax6.set_xlabel('rhot')
+        ax6.set_ylabel(r'$f(\rho_t)$ = LOS shell fraction')
+        ax6.set_title('LOS weight function')
+        if rho_bnd is not None and np.isfinite(rho_bnd):
+            ax6.axvline(rho_bnd, color='m', ls=':', lw=1.0,
+                        label=f'rho_bnd = {rho_bnd:.4f}')
+            ax6.legend(loc='best', fontsize=8)
+        ax6.set_xlim(0.0, 1.0)
+        ax6.set_ylim(0.0, 1.05)
+        ax6.grid(True, ls=':', lw=0.5)
 
     plt.tight_layout()
     plt.show()
@@ -508,10 +594,31 @@ def main(argv=None):
     # ------- Equivalent rho_bnd ----------------------------------------
     # Match Rate_tor (the toroidally-integrated LOS-region rate) against the
     # TRANSP cumulative flux-surface integral cumsum(THNTX*DVOL).
+    tr.add_data('DVOL')
+    unit_dv = tr.units('DVOL') or ''
+    dvol_to_m3 = 1.0e-6 if 'CM' in unit_dv.upper() else 1.0
+
     dvol_all = tr.profile('DVOL')
     dvol_x = dvol_all[trind] if dvol_all.ndim == 2 else dvol_all
-    xs_sorted, cum_emis = cumulative_emission(x_rhot, thntx_x, dvol_x)
+
+    order = np.argsort(x_rhot)
+    xs_sorted = np.asarray(x_rhot)[order]
+    thntx_sorted = np.asarray(thntx_x)[order]
+    dvol_sorted = np.asarray(dvol_x)[order]
+    cum_emis = np.cumsum(thntx_sorted * dvol_sorted)
     rho_bnd, total_plasma = find_rho_bnd(rate_tor, xs_sorted, cum_emis)
+
+    # ------- LOS-weighted profile THKM14(rhot) -------------------------
+    dvol_m3 = dvol_sorted * dvol_to_m3
+    f_profile, los_vol_bin = los_shell_fraction(
+        rhot, inside, R, Z, xs_sorted, dvol_m3
+    )
+    thntx_si_profile = thntx_sorted * thntx_to_si      # n/m3/s
+    thkm14_si_profile = thntx_si_profile * f_profile   # n/m3/s
+    # Sanity: bin-summed rate from LOS-weighted profile vs Rate_tor.
+    rate_from_profile = float(
+        np.sum(thntx_sorted * dvol_sorted * f_profile)
+    )
 
     # ------- Report -----------------------------------------------------
     print()
@@ -568,10 +675,54 @@ def main(argv=None):
               f'{abs(rate_B - rate_C) / rate_B if rate_B > 0 else float("nan"):.2e}'
               f'  (analytic zero; trapz/PCHIP residual)')
 
+    print()
+    print('--------------- THKM14(rhot) (LOS-weighted) ----------------')
+    print(f'  f(rhot) = LOS shell volume / TRANSP DVOL  (max f = {f_profile.max():.4f})')
+    print(f'  sum(THNTX * DVOL * f) = {rate_from_profile:.4e} n/s  '
+          f'(Rate_tor = {rate_tor:.4e})')
+    print(f'  relative residual     = '
+          f'{abs(rate_from_profile - rate_tor) / rate_tor:.2e}')
+
+    if args.save:
+        outdir = os.path.join(SRC_DIR, 'tmp')
+        os.makedirs(outdir, exist_ok=True)
+        out_path = os.path.join(
+            outdir,
+            f'{args.pulse}_{args.runid}_KM14_LOS_profile_t{time_jet:.3f}s.txt',
+        )
+        data = np.column_stack([
+            xs_sorted,
+            thntx_si_profile,
+            thkm14_si_profile,
+            f_profile,
+            dvol_m3,
+        ])
+        np.savetxt(
+            out_path, data,
+            header=(f'pulse {args.pulse}  TRANSP {args.runid}  '
+                    f't_JET = {time_jet:.3f} s\n'
+                    f'eq = {args.dda}/{args.uid}/{args.seq}  '
+                    f't_EQ = {eq.t[tind_eq]:.3f} s\n'
+                    f'LOS R in [{R[0]:.3f}, {R[-1]:.3f}] m  '
+                    f'(w_tor = {args.wtor:.3f} m)\n'
+                    f'Rate_LOS = {rate:.4e} n/s   '
+                    f'Rate_tor = {rate_tor:.4e} n/s   '
+                    f'rho_bnd = {rho_bnd}\n'
+                    f'    rhot           THNTX [n/m3/s]   '
+                    f'THKM14 [n/m3/s]  f               DVOL [m3]'),
+            fmt='%.8e',
+        )
+        print(f'Saved LOS profile to {out_path}')
+
     if args.plot:
         diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
                          inner_R, eq, tind_eq, args.pulse, args.runid,
-                         time_jet, Rmag, Zmag, rho_bnd=rho_bnd)
+                         time_jet, Rmag, Zmag,
+                         rho_bnd=rho_bnd,
+                         xs=xs_sorted,
+                         thntx_si_prof=thntx_si_profile,
+                         thkm14_si_prof=thkm14_si_profile,
+                         f_prof=f_profile)
 
     return 0
 
