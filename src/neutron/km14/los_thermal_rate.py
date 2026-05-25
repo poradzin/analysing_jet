@@ -251,7 +251,7 @@ def integrate_rate(thntx_grid_si, R, Z, w_tor):
     return float(rate), inner_R
 
 
-def toroidal_rate(thntx_grid_si, R, Z):
+def toroidal_rate(thntx_grid_si, R, Z, mask=None):
     """Toroidally-integrated emission rate over the LOS (R, Z) area.
 
     Replaces the linear toroidal width with the proper toroidal volume
@@ -260,11 +260,14 @@ def toroidal_rate(thntx_grid_si, R, Z):
 
         Rate_tor [n/s] = integral over R, Z of  2*pi*R * THNTX(R, Z) dR dZ
 
-    This is the apples-to-apples quantity to compare with the TRANSP
-    flux-surface integral cumsum(THNTX * DVOL).
+    If ``mask`` is given (boolean, same shape as ``thntx_grid_si``), the
+    integrand is zeroed outside the mask -- used for sub-region integrals
+    like "inside LOS AND inside rho_bnd".
     """
     Rg, _ = np.meshgrid(R, Z, indexing='ij')
     integrand = thntx_grid_si * (2.0 * np.pi) * Rg
+    if mask is not None:
+        integrand = integrand * np.asarray(mask, dtype=float)
     inner = np.trapz(integrand, R, axis=0)
     return float(np.trapz(inner, Z))
 
@@ -540,6 +543,30 @@ def main(argv=None):
     else:
         print(f'  rho_bnd such that cumsum(THNTX*DVOL)|_rho_bnd = Rate_tor: '
               f'{rho_bnd:.4f}')
+
+        # ------- A / B / C decomposition --------------------------------
+        # A = inside LOS  AND  inside rho_bnd       (LOS sees the core)
+        # B = inside LOS  AND  outside rho_bnd      (LOS sees the wings)
+        # C = inside rho_bnd  AND  outside LOS R-band (core LOS misses)
+        # By construction rate(B) = rate(C) since Rate_tor = cumsum|_rho_bnd.
+        mask_inner = inside & (rhot <= rho_bnd)
+        mask_outer = inside & (rhot > rho_bnd)
+        rate_A = toroidal_rate(thntx_grid_si, R, Z, mask=mask_inner)
+        rate_B = toroidal_rate(thntx_grid_si, R, Z, mask=mask_outer)
+        rate_C = rate_tor - rate_A  # = rate_B analytically; numerical check
+        print()
+        print('---- A / B / C decomposition (toroidally integrated) ----')
+        print(f'  A: inside LOS  AND  inside rho_bnd  = {rate_A:.4e} n/s'
+              f'  ({100.0 * rate_A / rate_tor:.2f} %)')
+        print(f'  B: inside LOS  AND  outside rho_bnd = {rate_B:.4e} n/s'
+              f'  ({100.0 * rate_B / rate_tor:.2f} %)')
+        print(f'  C: outside LOS AND  inside rho_bnd  = {rate_C:.4e} n/s'
+              f'  (= rate_tor - A)')
+        print(f'  Sanity: A + B           = {rate_A + rate_B:.4e} n/s  '
+              f'(should equal Rate_tor = {rate_tor:.4e})')
+        print(f'  Sanity: |B - C| / B     = '
+              f'{abs(rate_B - rate_C) / rate_B if rate_B > 0 else float("nan"):.2e}'
+              f'  (analytic zero; trapz/PCHIP residual)')
 
     if args.plot:
         diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
