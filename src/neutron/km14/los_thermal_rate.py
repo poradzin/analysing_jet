@@ -23,16 +23,19 @@ chord cross section so the volume element is
 
 Algorithm
 ~~~~~~~~~
-1.  Build a dense (R, Z) grid (nR x nZ, default 100 x 100) covering the
-    LOS extent.
-2.  For every grid point compute psin via the EFIT PSI map
-    (``change_rho.RZ_to_psin``).  Points with psin > 1 are flagged as
-    outside the LCFS.
-3.  Clip psin to [0, 1] and map to rhot = sqrt(normalized toroidal flux)
-    via ``psin_to_sqrt_ftor_norm``.
-4.  Interpolate the TRANSP ``THNTX(X)`` profile (X = rhot) onto the grid
-    using PCHIP; set ``THNTX = 0`` outside the LCFS.
-5.  Convert ``THNTX`` from TRANSP CGS units (N/CM3/SEC) to SI (n/m3/s)
+1.  Normalize EFIT ``PSI(PSIR, PSIZ)`` to ``PSIN`` on its native grid
+    (typically 65 x 65) via ``(PSI - FAXS) / (FBND - FAXS)`` -- no
+    interpolation needed since PSI is already there.
+2.  Append the magnetic-axis point ``(RMAG, ZMAG, PSIN=0)`` to make a
+    scattered set that anchors the centre.
+3.  ``griddata`` from this scattered set onto a dense (R, Z) meshgrid
+    (default 100 x 100) covering the LOS extent.
+4.  Mask ``PSIN > 1`` as outside the LCFS; clip the rest to [0, 1] and
+    map to ``rhot = sqrt(normalized toroidal flux)`` via
+    ``psin_to_sqrt_ftor_norm``.
+5.  PCHIP-interpolate the TRANSP ``THNTX(X)`` profile (X = rhot) onto the
+    dense rhot map; set ``THNTX = 0`` outside the LCFS.
+6.  Convert ``THNTX`` from TRANSP CGS units (N/CM3/SEC) to SI (n/m3/s)
     and integrate using the trapezoidal rule:
 
         Rate_LOS [n/s] = W_TOR * integral over R, Z of THNTX(R, Z) dR dZ
@@ -51,14 +54,14 @@ import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import PchipInterpolator
+from scipy.interpolate import PchipInterpolator, griddata
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
 sys.path.append(SRC_DIR)
 
 import profiles as ps
-from change_rho import RZ_to_psin, psin_to_sqrt_ftor_norm
+from change_rho import psin_to_sqrt_ftor_norm
 
 
 # -----------------------------------------------------------------------------
@@ -154,28 +157,50 @@ def build_rz_grid(eq, tind_eq, Rmin, Rmax, nR, nZ, z_margin):
     return R, Z, z_bot, z_top
 
 
-def map_grid_to_rhot(R, Z, eq, time_jet):
-    """Return rhot(R, Z) and an inside-LCFS mask, both with shape (nR, nZ)."""
+def map_grid_to_rhot(R, Z, eq, tind_eq, time_jet):
+    """Return rhot(R, Z), inside-LCFS mask, and the raw psin map.
+
+    Steps (no R,Z -> psi re-interpolation; PSI is already on its native grid):
+        1. Normalize PSI on (PSIR, PSIZ) to psin = (PSI - FAXS)/(FBND - FAXS).
+        2. Add the magnetic-axis point (RMAG, ZMAG, psin = 0) to make the
+           scattered set anchor the centre exactly.
+        3. griddata cubic onto the dense (R, Z) meshgrid; fall back to
+           linear for any residual NaNs near the edges.
+        4. psin > 1 -> outside LCFS; clip to [0, 1] for rhot mapping.
+        5. psin -> rhot via psin_to_sqrt_ftor_norm (1D PCHIP).
+    """
+    PSIR = np.asarray(eq._psir)
+    PSIZ = np.asarray(eq._psiz)
+    nRe = len(PSIR)
+    nZe = len(PSIZ)
+
+    # PSI on native grid: shape (nRe, nZe), R first.
+    psi_native = np.asarray(eq._psi[tind_eq]).reshape(nRe, nZe)
+    faxs = float(eq._faxs[tind_eq])
+    fbnd = float(eq._fbnd[tind_eq])
+    psin_native = (psi_native - faxs) / (fbnd - faxs)
+
+    Rg_n, Zg_n = np.meshgrid(PSIR, PSIZ, indexing='ij')
+    pts_R = np.concatenate([Rg_n.ravel(), [float(eq._Rmag[tind_eq])]])
+    pts_Z = np.concatenate([Zg_n.ravel(), [float(eq._Zmag[tind_eq])]])
+    pts_psin = np.concatenate([psin_native.ravel(), [0.0]])
+
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')  # (nR, nZ)
-    R_flat = Rg.ravel()
-    Z_flat = Zg.ravel()
+    query = np.column_stack([Rg.ravel(), Zg.ravel()])
 
-    # Step 1: (R, Z) -> psin (no clipping so we can detect LCFS).
-    psin_flat = RZ_to_psin(R_flat, Z_flat, eq, time_jet, method='cubic')
-    psin_flat = np.asarray(psin_flat)
+    psin_dense = griddata((pts_R, pts_Z), pts_psin, query, method='cubic')
+    if np.any(np.isnan(psin_dense)):
+        psin_lin = griddata((pts_R, pts_Z), pts_psin, query, method='linear')
+        psin_dense = np.where(np.isnan(psin_dense), psin_lin, psin_dense)
+    psin_dense = psin_dense.reshape(Rg.shape)
 
-    inside = (psin_flat >= 0.0) & (psin_flat <= 1.0)
-    # NaNs (points outside the EFIT grid) are treated as outside the plasma.
-    inside &= ~np.isnan(psin_flat)
-
-    # Step 2: clip and map to rhot. rhot stays in [0, 1] inside the LCFS.
-    psin_clipped = np.clip(np.where(np.isnan(psin_flat), 1.0, psin_flat),
+    inside = (psin_dense >= 0.0) & (psin_dense <= 1.0) & ~np.isnan(psin_dense)
+    psin_clipped = np.clip(np.where(np.isnan(psin_dense), 1.0, psin_dense),
                            0.0, 1.0)
-    rhot_flat = psin_to_sqrt_ftor_norm(psin_clipped, eq, time_jet)
 
-    rhot = np.asarray(rhot_flat).reshape(Rg.shape)
-    inside = inside.reshape(Rg.shape)
-    return rhot, inside, Rg, Zg
+    rhot = psin_to_sqrt_ftor_norm(psin_clipped.ravel(), eq, time_jet)
+    rhot = np.asarray(rhot).reshape(Rg.shape)
+    return rhot, inside, psin_dense, Rg, Zg
 
 
 def thntx_on_grid(x_rhot, thntx_x, rhot_grid, inside_mask):
@@ -313,7 +338,9 @@ def main(argv=None):
           f'Rmag - R_c = {Rmag - 0.5 * (R[0] + R[-1]):+.3f} m')
 
     # ------- (R, Z) -> rhot --------------------------------------------
-    rhot, inside, Rg, Zg = map_grid_to_rhot(R, Z, eq, time_jet)
+    rhot, inside, psin_dense, Rg, Zg = map_grid_to_rhot(
+        R, Z, eq, tind_eq, time_jet
+    )
     n_inside = int(np.count_nonzero(inside))
     print(f'  Grid points inside LCFS: {n_inside} / {inside.size} '
           f'({100.0 * n_inside / inside.size:.1f} %)')
