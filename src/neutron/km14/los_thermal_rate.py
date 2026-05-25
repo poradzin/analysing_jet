@@ -32,8 +32,11 @@ Algorithm
 3.  ``griddata`` cubic from this scattered set onto a dense (R, Z)
     meshgrid (default 100 x 100) covering the LOS extent; linear
     fallback for edge NaNs.
-4.  Mask ``PSIN > 1`` as outside the LCFS; clip the rest to [0, 1] and
-    map to ``rhot = sqrt(normalized toroidal flux)`` via
+4.  Build the inside-LCFS mask as a point-in-polygon test against
+    ``(RBND, ZBND)`` (closed boundary). This excludes the private flux
+    region below the X-point, which is where ``psin < 1`` but TRANSP
+    does not model emission. Then clip ``psin`` to [0, 1] and map to
+    ``rhot = sqrt(normalized toroidal flux)`` via
     ``psin_to_sqrt_ftor_norm``.
 5.  PCHIP-interpolate the TRANSP ``THNTX(X)`` profile (X = rhot) onto the
     dense rhot map; set ``THNTX = 0`` outside the LCFS.
@@ -56,6 +59,7 @@ import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.path import Path as MplPath
 from scipy.interpolate import PchipInterpolator, griddata
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -177,13 +181,11 @@ def map_grid_to_rhot(R, Z, eq, tind_eq, time_jet):
         * ``eq._psi_norm[tind]`` -- flat 1D array stored in the *same*
           C-order, so ravel'd coordinates and values pair correctly.
 
-    Algorithm:
-        1. Build scattered (R, Z, psin) from psirzmg + psi_norm; append
-           the magnetic axis (Rmag, Zmag, psin = 0) to anchor the centre.
-        2. griddata cubic onto the dense (R, Z) meshgrid; linear fallback
-           for edge NaNs.
-        3. psin > 1 -> outside LCFS; clip and map to rhot via
-           psin_to_sqrt_ftor_norm.
+    The ``inside`` mask is the closed LCFS polygon test on (RBND, ZBND),
+    NOT ``psin <= 1``. The latter would include the private flux region
+    below the X-point -- ``psin`` is < 1 there but TRANSP does not model
+    emission outside the confined plasma, so including the PFR would
+    bias the integral upward by a small but spurious amount.
     """
     Rg_n = np.asarray(eq._psirzmg[0])
     Zg_n = np.asarray(eq._psirzmg[1])
@@ -202,10 +204,13 @@ def map_grid_to_rhot(R, Z, eq, tind_eq, time_jet):
         psin_dense = np.where(np.isnan(psin_dense), psin_lin, psin_dense)
     psin_dense = psin_dense.reshape(Rg.shape)
 
-    inside = (psin_dense >= 0.0) & (psin_dense <= 1.0) & ~np.isnan(psin_dense)
+    # Inside-LCFS mask from the closed boundary polygon -- excludes the PFR.
+    Rb, Zb = _lcfs_contour(eq, tind_eq)
+    lcfs_poly = MplPath(np.column_stack([Rb, Zb]))
+    inside = lcfs_poly.contains_points(query).reshape(Rg.shape)
+
     psin_clipped = np.clip(np.where(np.isnan(psin_dense), 1.0, psin_dense),
                            0.0, 1.0)
-
     rhot = psin_to_sqrt_ftor_norm(psin_clipped.ravel(), eq, time_jet)
     rhot = np.asarray(rhot).reshape(Rg.shape)
     return rhot, inside, psin_dense, Rg, Zg
