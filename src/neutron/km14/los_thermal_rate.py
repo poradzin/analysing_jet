@@ -147,10 +147,18 @@ def get_transp_slice(tr, time_jet):
 
 
 def build_rz_grid(eq, tind_eq, Rmin, Rmax, nR, nZ, z_margin):
-    """Build a (nR x nZ) Cartesian grid covering the LOS region."""
-    Zbnd = np.asarray(eq._Zbnd[:, tind_eq])
-    z_top = float(np.nanmax(Zbnd))
-    z_bot = float(np.nanmin(Zbnd))
+    """Build a (nR x nZ) Cartesian grid covering the LOS region.
+
+    The Z range is taken from the EFIT computational box ``eq._psiz`` (the
+    whole vessel), not from ZBND. We saw on pulse 104614 that ``_Zbnd``
+    appears to be transposed relative to its reshape parameter and slicing
+    with ``[:, tind_eq]`` returns a single boundary point sampled over the
+    full discharge -- giving a spuriously narrow Z range. Using the PSI
+    grid is robust: vacuum points get zeroed out by the rhot >= 1 mask.
+    """
+    PSIZ = np.asarray(eq._psiz)
+    z_bot = float(np.nanmin(PSIZ))
+    z_top = float(np.nanmax(PSIZ))
 
     R = np.linspace(Rmin, Rmax, nR)
     Z = np.linspace(z_bot - z_margin, z_top + z_margin, nZ)
@@ -241,10 +249,14 @@ def integrate_rate(thntx_grid_si, R, Z, w_tor):
 # -----------------------------------------------------------------------------
 # Diagnostics
 # -----------------------------------------------------------------------------
-def diagnostic_plots(R, Z, rhot, inside, thntx_grid_si, inner_R,
+def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                      eq, tind_eq, pulse, runid, time_jet,
-                     Rmag, Zmag, Rbnd, Zbnd):
-    """Three-panel diagnostic: rhot(R,Z), THNTX(R,Z), linear emissivity vs Z."""
+                     Rmag, Zmag):
+    """Three-panel diagnostic: rhot(R,Z), THNTX(R,Z), linear emissivity vs Z.
+
+    The LCFS is drawn from our own dense psin map (contour psin = 1) so the
+    overlay is independent of the ambiguous ZBND axis order in profiles.py.
+    """
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')
     rhot_plot = np.where(inside, rhot, np.nan)
 
@@ -257,18 +269,18 @@ def diagnostic_plots(R, Z, rhot, inside, thntx_grid_si, inner_R,
     ax1 = fig.add_subplot(1, 3, 1)
     pc1 = ax1.pcolormesh(Rg, Zg, rhot_plot, shading='auto', cmap='viridis')
     fig.colorbar(pc1, ax=ax1, label='rhot')
-    ax1.plot(Rbnd, Zbnd, 'w-', lw=1.0, label='LCFS')
+    ax1.contour(Rg, Zg, psin_dense, levels=[1.0], colors='white', linewidths=1.0)
     ax1.plot([Rmag], [Zmag], 'r+', ms=10, label='axis')
     ax1.set_xlabel('R [m]')
     ax1.set_ylabel('Z [m]')
-    ax1.set_title('rhot on LOS grid')
+    ax1.set_title('rhot on LOS grid (LCFS = psin=1 contour)')
     ax1.legend(loc='best', fontsize=8)
     ax1.set_aspect('equal', adjustable='box')
 
     ax2 = fig.add_subplot(1, 3, 2)
     pc2 = ax2.pcolormesh(Rg, Zg, thntx_grid_si, shading='auto', cmap='inferno')
     fig.colorbar(pc2, ax=ax2, label='THNTX [n/m3/s]')
-    ax2.plot(Rbnd, Zbnd, 'c-', lw=1.0)
+    ax2.contour(Rg, Zg, psin_dense, levels=[1.0], colors='cyan', linewidths=1.0)
     ax2.plot([Rmag], [Zmag], 'w+', ms=10)
     ax2.set_xlabel('R [m]')
     ax2.set_ylabel('Z [m]')
@@ -333,7 +345,7 @@ def main(argv=None):
     )
     print(f'  LOS R in [{R[0]:.3f}, {R[-1]:.3f}] m  ({args.nR} samples)')
     print(f'  LOS Z in [{Z[0]:.3f}, {Z[-1]:.3f}] m  ({args.nZ} samples) '
-          f'[LCFS Z: {z_bot:.3f} .. {z_top:.3f}]')
+          f'[EFIT PSIZ extent: {z_bot:.3f} .. {z_top:.3f}]')
     print(f'  LOS centre R_c = {0.5 * (R[0] + R[-1]):.3f} m, '
           f'Rmag - R_c = {Rmag - 0.5 * (R[0] + R[-1]):+.3f} m')
 
@@ -377,11 +389,9 @@ def main(argv=None):
     print('============================================================')
 
     if args.plot:
-        Rbnd = np.asarray(eq._Rbnd[:, tind_eq])
-        Zbnd = np.asarray(eq._Zbnd[:, tind_eq])
-        diagnostic_plots(R, Z, rhot, inside, thntx_grid_si, inner_R,
-                         eq, tind_eq, args.pulse, args.runid, time_jet,
-                         Rmag, Zmag, Rbnd, Zbnd)
+        diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
+                         inner_R, eq, tind_eq, args.pulse, args.runid,
+                         time_jet, Rmag, Zmag)
 
     return 0
 
