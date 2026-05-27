@@ -5,6 +5,7 @@ Created on Tue Dec 06 15:42:45 2016
 @author: k3nob1
 """
 
+import os
 import numpy as np
 import scipy as sc
 import scipy.interpolate as scinterpolate
@@ -15,7 +16,7 @@ import matplotlib.tri as tri
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib import cm
 import matplotlib.patches as patches
-import ppf
+#import ppf
 
 
 mpl.rcParams['font.family'] = 'Gulliver'
@@ -23,7 +24,7 @@ mpl.rcParams.update({'font.size': 16})
 
 # Read the NetCDF file with the Dataset module
 
-RunID = '99811M12'
+RunID = '104614M30'
 pulse = int(RunID[:-3])
 
 print(RunID)
@@ -31,14 +32,16 @@ print(RunID)
 
 
 # Read the NetCDF file with the Dataset module
+TRANSP_dir = f"/home/{os.environ['USER']}/jet/data/"
+pulse_dir = TRANSP_dir+f'{RunID[:-3]}/'
+run_dir = pulse_dir+f'{RunID[-3:]}/'
 
-
-BasicDat = Dataset('{}.CDF'.format(RunID), 'r')
+BasicDat = Dataset(run_dir+f'{RunID}.CDF', 'r')
 BasicDat_list = []
 for item in BasicDat.variables.keys():
     BasicDat_list.append(item)
 
-TRANSPDat = Dataset('{}_fi_1.cdf'.format(RunID), 'r')
+TRANSPDat = Dataset(run_dir+f'{RunID}_fi_1.cdf', 'r')
 TRANSPDat_list = []
 for item in TRANSPDat.variables.keys():
     TRANSPDat_list.append(item)
@@ -49,7 +52,7 @@ LimiterDat_list = []
 #for item in LimiterDat.variables.keys():
 #    LimiterDat_list.append(item)
 
-NeutronDat = Dataset('{}_neut_1.cdf'.format(RunID), 'r')
+NeutronDat = Dataset(run_dir+f'{RunID}_neut_1.cdf', 'r')
 NeutronDat_list = []
 for item in NeutronDat.variables.keys():
     NeutronDat_list.append(item)
