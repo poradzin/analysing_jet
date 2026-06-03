@@ -597,3 +597,80 @@ Open questions to settle when starting commit 2:
 * Where to land commit 2: same `src/neutron/km14/` directory, name
   `bt_zone_integrator.py` (or a clearer name suggesting "per-zone
   emissivity").
+
+---
+
+# `bt_zone_integrator.py` — context (added 2026-06-03, commit 2 of step 2)
+
+`src/neutron/km14/bt_zone_integrator.py` is the per-zone beam-target
+reactivity integrator. **Acceptance test PASSED**: the in-house 4π
+reactivity reproduces NUBEAM's `BTN4` (DD) and `BTN1` (DT) on 104614 M30
+idx 1 to **1.004 / 1.001** on the volume integral (per-zone medians
+1.017 / 1.003). This validates the `bt_kinematics` chain end-to-end.
+
+## Key simplification — no B-field needed in commit 2
+
+For the *4π-integrated* per-zone rate the thermal target is an isotropic
+Maxwellian, so `<σ·v_rel>` depends only on the fast-ion **speed**, not on
+pitch ξ, gyrophase, or B̂. Hence:
+
+```
+ε_BT(zone) = n_fast(zone) · n_th(zone) · <σ(E_cm)·v_rel>     [1/cm³/s]
+```
+
+The whole PSIRZ→B̂ machinery (planned in the Thursday notes) is **not
+needed here** — it only enters commit 3, where the emitted-neutron
+*direction* (LOS projection) finally depends on the fast-ion velocity
+vector. The B-field reader is therefore deferred to commit 3.
+
+## The F_D_NBI vs BDENS_D normalization gap (the main finding)
+
+`F_D_NBI` integrates (Σ F·dE·dξ·½) to `NTOT_D_NBI` *exactly*, but that is
+**~19% below** the full beam-ion density `BDENS_D`:
+`sum(n_fast·BMVOL)=8.18e19` vs `sum(BDENS_D·BMVOL)=1.01e20` (ratio 0.809).
+NUBEAM computes `BTN4`/`BTN1` from the full beam density, so using the raw
+F normalization gives a flat **0.81×** deficit across radius, *identical
+for DD and DT* (different cross sections → rules out a kinematics error).
+
+Diagnostic path that nailed it (all dead-ends documented so we don't
+re-walk them):
+* `<σv>` validated absolutely vs Bosch–Hale thermal DD reactivity
+  (6.1e-19 / 2.6e-18 cm³/s at 10/20 keV) — kinematics correct.
+* `BTNTOT4 = BTN4·BMVOL`; `BTN4` is the emissivity (1/cm³/s) we compare to.
+* **Rotation is a red herring**: Ω≈5.3e4 rad/s → v_rot≈159 km/s, only ~6%
+  of the fast-ion speed (2680 km/s). Toroidal-approx test gave only ±3%,
+  and the co-injection (co-rotation) sign makes agreement *worse*
+  (0.804→0.789). Not the cause.
+* **Time-averaging is a red herring**: FBM window `DT_AVG=0.175 s` but
+  thermal ND/TI/NE vary <1% across it.
+* **`sum(BMVOL)==sum(DVOL)`** exactly (6.815e7 cm³) — not a volume-
+  coverage issue.
+
+Fix (default `--fast-norm bdens`): rescale `n_fast` per flux-surface row
+by `BDENS_D(x)/<n_fast(F)>_flux(x)` (per-row factors 1.12–1.27). This
+preserves F's validated poloidal/energy *shape* and fixes only the radial
+*magnitude*. `--fast-norm ntot` keeps the raw F normalization (0.81) for
+comparison.
+
+## CLI / structure
+```bash
+python src/neutron/km14/bt_zone_integrator.py 104614 M30 --idx 1 --plot
+python src/neutron/km14/bt_zone_integrator.py 104614 M30 --fast-norm ntot
+```
+Flags: `--idx --data-dir --nsamp --seed --fast-norm {bdens,ntot} --plot --save --no-plot`.
+Inputs: `F_D_NBI`/`E_D_NBI`/`A_D_NBI`/`BMVOL`/`X2D` (`_fi`); `ND`/`NT`/`TI`/
+`BDENS_D` (main CDF, interp to zone X2D); `BTN4`/`BTN1` (`_neut`, reference).
+Reuses `bt_kinematics` for σ and `relative_cm_energy_keV`.
+
+## Open items before commit 3 (LOS projection)
+
+* Per-zone *scatter* (min 0.47, max 1.23 about the median ~1.0) is the
+  residual poloidal mismatch: BDENS_D is a flux function so the per-row
+  renorm matches the flux average, but individual θ-zones still differ
+  from NUBEAM's poloidal F structure. Acceptable for the 4π test;
+  irrelevant once we integrate along the LOS, but worth a look.
+* Commit 3 still needs the **B-field reader** (`PSIRZ` 101×161 on
+  `RGRID`/`ZGRID` in cm; `B_φ` from `BZXR`·`GFUN`/R, BZXR=854.8 T·cm) for
+  the velocity-vector direction and the LOS projection.
+* Whether to fold the same BDENS_D renorm into commit 3 (yes — it's a
+  density normalization, independent of the angular treatment).
