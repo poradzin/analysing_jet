@@ -39,13 +39,13 @@ Data layout
 TRANSP run directory is searched in this order:
     1. --data-dir if given,           <data-dir>/<pulse>/<run_suffix>
     2. ~/jet/data/<pulse>/<run_suffix>          (WSL local)
-    3. /common/transp_share/Data/result/JET/<pulse>/<run_suffix>  (heimdall)
+    3. /common/transp_shared/Data/result/JET/<pulse>/<run_suffix>  (heimdall)
 
 Usage
 -----
     python bt_poloidal_distribution.py 104614 M30
     python bt_poloidal_distribution.py 104614 M30 --idx 2
-    python bt_poloidal_distribution.py 104614 M30 --data-dir /common/transp_share/Data/result/JET --save bt_M30_idx1.png
+    python bt_poloidal_distribution.py 104614 M30 --data-dir /common/transp_shared/Data/result/JET --save bt_M30_idx1.png
 """
 
 import argparse
@@ -59,7 +59,7 @@ from netCDF4 import Dataset
 
 
 DEFAULT_LOCAL_BASE = Path.home() / "jet" / "data"
-HEIMDALL_BASE = Path("/common/transp_share/Data/result/JET")
+HEIMDALL_BASE = Path("/common/transp_shared/Data/result/JET")
 
 
 # ----------------------------------------------------------------------

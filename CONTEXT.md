@@ -327,7 +327,7 @@ step 2 below.
 
 1. `--data-dir <base>/<pulse>/<run_suffix>` if given
 2. `~/jet/data/<pulse>/<run_suffix>` (local WSL)
-3. `/common/transp_share/Data/result/JET/<pulse>/<run_suffix>` (heimdall)
+3. `/common/transp_shared/Data/result/JET/<pulse>/<run_suffix>` (heimdall)
 
 ## Algorithm
 
@@ -350,7 +350,7 @@ step 2 below.
 python src/neutron/km14/bt_poloidal_distribution.py 104614 M30
 python src/neutron/km14/bt_poloidal_distribution.py 104614 M30 --idx 2
 python src/neutron/km14/bt_poloidal_distribution.py 104614 M30 \
-       --data-dir /common/transp_share/Data/result/JET --save bt.png
+       --data-dir /common/transp_shared/Data/result/JET --save bt.png
 ```
 
 Flags: `--idx`, `--data-dir`, `--no-plot`, `--save`.

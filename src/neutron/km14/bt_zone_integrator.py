@@ -52,7 +52,7 @@ CLI
 ---
     python bt_zone_integrator.py 104614 M30 --idx 1 --plot
     python bt_zone_integrator.py 104614 M30 --nsamp 50000 --seed 0
-    python bt_zone_integrator.py 104614 M30 --data-dir /common/transp_share/Data/result/JET
+    python bt_zone_integrator.py 104614 M30 --data-dir /common/transp_shared/Data/result/JET
 
 Flags: --idx --data-dir --nsamp --seed --plot --save --no-plot
 """
@@ -69,7 +69,7 @@ from netCDF4 import Dataset
 import bt_kinematics as btk
 
 DEFAULT_LOCAL_BASE = Path.home() / "jet" / "data"
-HEIMDALL_BASE = Path("/common/transp_share/Data/result/JET")
+HEIMDALL_BASE = Path("/common/transp_shared/Data/result/JET")
 
 
 # ----------------------------------------------------------------------
