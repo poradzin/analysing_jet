@@ -825,3 +825,86 @@ Plot (1×4): eps_TH(R,Z), eps_BT(R,Z), local TH/BT, R-integrated vs Z.
   question flagged for the thermal channel; currently pure emissivity.
 * Time dependence: BT only exists at FBM idx times; for a TH/BT *trace*
   loop over available `_fi`/`_neut` indices.
+
+---
+
+# HOW TO RUN — step-2 BT scripts (quickstart, 2026-06-03)
+
+All four step-2 scripts live in `src/neutron/km14/` and are **self-contained
+on the TRANSP CDFs** (netCDF4 + numpy + scipy + matplotlib only — no `ppf`,
+no `profiles.Eq`), so they run in the local WSL dev env, on freia and on
+heimdall alike. Run them **from inside `src/neutron/km14/`** (they import each
+other as plain modules, e.g. `import bt_kinematics`).
+
+```bash
+cd ~/jet/analysing_jet/src/neutron/km14
+```
+
+## What data they need
+
+Per `(pulse, run)`, three CDFs in the run directory:
+`<run>.CDF` (main), `<run>_fi_<idx>.cdf` (fast-ion dist + zone geometry),
+`<run>_neut_<idx>.cdf` (per-zone BT rates). The scripts search, in order:
+`--data-dir <base>/<pulse>/<run>`, then `~/jet/data/<pulse>/<run>`, then
+`/common/transp_shared/Data/result/JET/<pulse>/<run>` (heimdall). Locally only
+**104614 M30** is present (`~/jet/data/104614/M30/`); on freia/heimdall point
+`--data-dir` at the TRANSP results tree. `--idx` selects the FBM time window
+(M30 has 1, 2, 3 at t≈12.33, 13.33, 14.23 s); default = first available.
+
+## Recommended order (each step validates the next)
+
+**0. Kinematics unit tests (no data needed)** — confirm the physics core:
+```bash
+python bt_kinematics.py            # 5 sigma spot-checks + 2 kinematic-band tests -> PASS
+python bt_kinematics.py --plot     # optional: sigma(E_cm) curves
+```
+
+**1. Per-zone reactivity (commit 2)** — acceptance test vs NUBEAM BTN4/BTN1:
+```bash
+python bt_zone_integrator.py 104614 M30 --idx 1            # text report
+python bt_zone_integrator.py 104614 M30 --idx 1 --plot     # + (R,Z) scatter & per-zone agreement
+```
+Look for: `ratio in-house / NUBEAM` ≈ **1.00** for DD and DT (the headline
+acceptance result). `--fast-norm ntot` reproduces the raw-F ~0.81 deficit for
+comparison; `--nsamp` raises MC statistics.
+
+**2. LOS angular emissivity (commit 3)** — the KM14 anisotropy factor:
+```bash
+python bt_los_emissivity.py --test                         # selftest vs analytic dipole -> PASS
+python bt_los_emissivity.py 104614 M30 --idx 1 --plot      # g(R,Z) maps + report
+```
+Look for: `vector Eps_4pi / NUBEAM` ≈ 1.00 (consistency with step 1) and
+`reactivity-weighted mean g` ≈ **1.00** (KM14 sees BT as isotropic). Useful
+flags: `--cone-deg` (LOS acceptance cone), `--no-rotation`, `--nsamp`.
+
+**3. KM14 LOS TH/BT ratio (commit 3b) — the deliverable:**
+```bash
+python los_th_bt_ratio.py 104614 M30 --idx 1               # DD channel, flux-avg BT
+python los_th_bt_ratio.py 104614 M30 --idx 1 --plot        # + eps_TH, eps_BT, TH/BT maps
+python los_th_bt_ratio.py 104614 M30 --idx 1 --bt-mode zone  # poloidal-asymmetry check (~4%)
+python los_th_bt_ratio.py 104614 M30 --idx 1 --channel dt    # DT (14 MeV) instead of DD
+```
+Look for: `(TH/BT)_LOS` (the quantity to compare with the measured KM14
+TH/BT), the `whole plasma (0D)` ratio, and the `core enhancement LOS vs
+plasma` factor (≈1.14 on M30 DD — KM14 weights the core, so its TH/BT differs
+from the total-yield ratio). The chord geometry cancels in the ratio.
+
+## Saving outputs instead of showing windows
+
+Every script's `--plot` opens an interactive window; pass `--save <file.png>`
+(on `bt_los_emissivity` / `los_th_bt_ratio`) to write a PNG headless instead
+(handy over SSH). `--no-plot` forces text-only. `key=value` argument style is
+also accepted by the older scripts (e.g. `dda=eftp`).
+
+## Immediate next step (Thursday)
+
+Run the chain on **104614 M29** (the real pure-DD KM14 thermal-analysis run)
+on freia/heimdall, since only M30 is local:
+```bash
+python los_th_bt_ratio.py 104614 M29 --channel dd \
+       --data-dir /common/transp_shared/Data/result/JET --plot
+```
+then compare `(TH/BT)_LOS` against the spectroscopically-measured KM14 TH/BT
+for that pulse/time. (M29 is pure DD, so `--channel dd` is the physical
+choice and DT is absent.) If a TH/BT time trace is wanted, loop over the
+available `--idx` FBM windows.
