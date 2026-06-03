@@ -757,3 +757,71 @@ Plot (2×n): row 0 `Eps_4pi(R,Z)`, row 1 anisotropy factor g(R,Z).
 * Per-zone g has visible MC scatter (~few % at nsamp=60k); the
   reactivity-weighted mean is robust. Raise `--nsamp` if a per-zone map is
   wanted.
+
+---
+
+# `los_th_bt_ratio.py` — context (added 2026-06-03, commit 3b of step 2)
+
+`src/neutron/km14/los_th_bt_ratio.py` computes the **KM14 line-of-sight
+TH/BT neutron ratio** for a TRANSP run — the quantity to compare against
+the spectroscopically-measured KM14 TH/BT. It is the beam-target
+extension of `los_thermal_rate.py`, but **fully self-contained on the
+TRANSP CDFs** (no `profiles.Eq` / ppf), so it runs in the WSL dev env as
+well as on freia. This is justified because commit 3 showed the BT
+*emission direction* is isotropic to <0.5% for KM14, so the 4π per-zone
+emissivity is the correct thing to line-integrate.
+
+## Result (104614 M30 idx 1, DD channel)
+
+```
+(TH/BT)_LOS              = 0.353   (flux mode) / 0.367 (zone mode)
+(TH/BT) whole plasma 0D  = 0.310
+core enhancement LOS/0D  = 1.14x
+```
+
+So KM14 sees a ~14% higher thermal fraction than the volume-averaged
+ratio — the chord weights the core differently from the total yield. The
+poloidal-asymmetry correction (flux- vs zone-mode) is only ~4%.
+
+## Method (CDF-only)
+
+* **Equilibrium** `CdfEquilibrium`: psi(R,Z) from `PSIRZ` (C-order (Z,R)),
+  normalized by `PSI0_TR`/`PLFLXA`; rhot(psi_n) inverted from `PLFLX` vs
+  `XB`. Bilinear (R,Z)→rhot. LCFS polygon from `_fi` `RSURF/ZSURF[-1]`.
+* **Thermal** eps_TH(rhot): the flux-function `THNTX_<chan>` profile.
+* **Beam-target** eps_BT(rhot): `--bt-mode flux` (default) = BMVOL-weighted
+  flux-surface average of per-zone `BTN4`/`BTN1`; `--bt-mode zone` =
+  per-zone cubic griddata onto the chord (keeps poloidal asymmetry, ~4%
+  effect).
+* Both mapped onto the KM14 chord grid, chord-integrated. **For the ratio
+  the chord geometry (w_tor, 2πR, solid angle) cancels**, so it's robust
+  and equilibrium-choice-insensitive (TH and BT see the same surfaces).
+* Cross-checks printed: full-torus ratio (== chord ratio for flux mode),
+  0D whole-plasma ratio, BT whole-plasma vs `sum(BTN4·BMVOL)` and
+  `BTNTS_DD`.
+
+## Channels
+
+`--channel dd` (default): `THNTX_DD` vs `BTN4` — the 2.45 MeV DD neutrons
+KM14 separates. `dt`: `THNTX_DT` vs `BTN1` (14 MeV). For the pure-DD M29
+run (the real KM14 thermal target) use `dd`.
+
+## CLI
+```bash
+python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 1 --plot
+python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --bt-mode zone
+```
+Flags: `--idx --data-dir --channel {dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot`.
+Plot (1×4): eps_TH(R,Z), eps_BT(R,Z), local TH/BT, R-integrated vs Z.
+
+## Open / next
+
+* **Run on the M29 pure-DD case** (the actual KM14 thermal-analysis run,
+  pulse 104614 M29) and **compare against the measured KM14 TH/BT.** Needs
+  the M29 `_fi`/`_neut` CDFs (only M30 is in `~/jet/data` locally).
+* Decide whether to fold the commit-3 angular factor g (≈1.00 for KM14) in
+  explicitly — currently omitted as <0.5%.
+* Optional: detector response (energy window/scattering) — same open
+  question flagged for the thermal channel; currently pure emissivity.
+* Time dependence: BT only exists at FBM idx times; for a TH/BT *trace*
+  loop over available `_fi`/`_neut` indices.
