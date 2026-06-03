@@ -674,3 +674,86 @@ Reuses `bt_kinematics` for σ and `relative_cm_energy_keV`.
   the velocity-vector direction and the LOS projection.
 * Whether to fold the same BDENS_D renorm into commit 3 (yes — it's a
   density normalization, independent of the angular treatment).
+
+---
+
+# `bt_los_emissivity.py` — context (added 2026-06-03, commit 3 of step 2)
+
+`src/neutron/km14/bt_los_emissivity.py` is the direction-resolved
+beam-target emissivity: it extends the 4π per-zone reactivity of
+`bt_zone_integrator` to `dε/dΩ(n̂)` and evaluates the anisotropy along the
+KM14 vertical sight line.
+
+## Headline result
+
+**For KM14's vertical sight line, BT neutron emission is isotropic to
+<0.5%** — reactivity-weighted mean anisotropy factor g = 1.00 (DD +0.1%,
+DT −0.3%) on 104614 M30 idx 1. So the commit-2 4π emissivity is an
+excellent approximation for the KM14 BT contribution; **no angular
+correction is needed**. BT can be folded into the KM14 LOS using the
+commit-2 spatial emissivity directly (e.g. via the `los_thermal_rate`
+chord-integral machinery).
+
+Why: the CM→lab boost axis is the centre-of-mass velocity, which is
+dominated by the fast ion streaming along B̂. B̂ is 97–100% toroidal, and
+KM14 views vertically — `angle(B̂, LOS)` is 76–90° (median 84°), i.e.
+nearly perpendicular to the boost. The kinematic anisotropy is a dipole
+`1 ± 2β` (β = v_cm/u_n ≈ 0.07 for DD, 0.02 for DT) which **cancels at 90°**
+to leading order; bidirectional fast ions (co+counter) cancel residuals
+further. The old notes' "10–30% anisotropy" is the *forward/backward*
+peak-to-peak (what a tangential viewer like KN3 sees), not KM14.
+
+## Validation
+
+* **Self-test** (`python bt_los_emissivity.py --test`): a clean 100 keV D
+  beam fired +ŷ into cold D reproduces the analytic boost dipole — forward
+  g=1.144 (predict 1.143), perp g=1.001, back g=0.869 (predict 0.857).
+  Confirms the cone estimator is correct in absolute magnitude.
+* **Consistency test 1** (built into the main run): the vector-based
+  `Eps_4pi` reproduces NUBEAM BTN4/BTN1 (0.983/0.988) — the velocity-vector
+  machinery doesn't change the scalar rate (matches commit 2).
+* Estimator cross-check: projecting along toroidal ŷ (along boost) gives
+  the largest g (DD +1.5%), vertical/radial ≈1 — directionally sensible.
+
+## B-field reader (new, validated)
+
+`BField(cdf_path, time)` reads `PSIRZ` (flat, **C-order (Z, R)** →
+reshape (nZ, nR); axis = ψ-min = PSI0_TR=0 lands at the known magnetic
+axis) on `RGRID`/`ZGRID` (cm). Then `B_R=-(1/R)∂ψ/∂Z`, `B_Z=+(1/R)∂ψ/∂R`
+(ψ in Wb/rad → T), `B_phi=BZXR/R` (BZXR = R·Bφ vacuum = 854.8 T·cm; GFUN
+diamagnetic correction ≤1.6% neglected — negligible for B̂ *direction*).
+Bilinear interp returns B̂ in the (R, φ, Z) basis. Sanity-checked: B_pol→0
+on axis, B_Z=+0.55 T outboard midplane, B_φ=2.82 T·(R_axis/R).
+
+## Method
+
+Per zone, MC-sample fast ions from F (speed + pitch ξ + uniform gyrophase,
+built into a velocity *vector* using the zone B̂), pair with a Maxwellian
+(+toroidal rotation Ω·R) thermal partner, weight by σ·v_rel, emit an
+isotropic-CM neutron → lab direction via `bt_kinematics.neutron_lab_velocity`.
+`dε/dΩ(n̂_LOS)` = `Eps_4pi` × (reaction-weight fraction in a cone of
+half-angle `--cone-deg` about n̂_LOS) / cone solid angle. n̂_LOS = +ẑ.
+
+## CLI
+```bash
+python src/neutron/km14/bt_los_emissivity.py 104614 M30 --idx 1 --plot
+python src/neutron/km14/bt_los_emissivity.py --test
+```
+Flags: `--idx --data-dir --nsamp --cone-deg --fast-norm --no-rotation --seed --plot --save --no-plot`.
+Plot (2×n): row 0 `Eps_4pi(R,Z)`, row 1 anisotropy factor g(R,Z).
+
+## Still open (commit 3b / later)
+
+* **FIDASIM benchmark** — the external cross-check from the original
+  commit-3 scope. Needs FIDASIM input prep (TRANSP CDF + EFIT equilibrium
+  in FIDASIM format; preprocessors in `~/jet/FIDASIM*/lib/python/`). Given
+  the anisotropy is <0.5% for KM14, this is now lower priority for the
+  *thermal-equivalent* goal but still wanted to validate the absolute
+  angular machinery for tangential channels (KN3).
+* **Full LOS chord integral** — fold the (now validated as ~isotropic) BT
+  emissivity into the KM14 chord integral. Because g≈1, this reduces to
+  running the commit-2 4π emissivity through the `los_thermal_rate`
+  chord-integral / THKM14-weight pipeline. No new angular machinery needed.
+* Per-zone g has visible MC scatter (~few % at nsamp=60k); the
+  reactivity-weighted mean is robust. Raise `--nsamp` if a per-zone map is
+  wanted.
