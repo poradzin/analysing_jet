@@ -252,8 +252,8 @@ def integrate_rate(thntx_grid_si, R, Z, w_tor):
     Returns the rate in n/s and the dR-integrated linear emissivity
     (n/s per meter of Z) for diagnostics.
     """
-    inner_R = np.trapz(thntx_grid_si, R, axis=0)        # over R -> shape (nZ,)
-    rate = w_tor * np.trapz(inner_R, Z)                 # over Z -> scalar
+    inner_R = np.trapezoid(thntx_grid_si, R, axis=0)        # over R -> shape (nZ,)
+    rate = w_tor * np.trapezoid(inner_R, Z)                 # over Z -> scalar
     return float(rate), inner_R
 
 
@@ -274,8 +274,8 @@ def toroidal_rate(thntx_grid_si, R, Z, mask=None):
     integrand = thntx_grid_si * (2.0 * np.pi) * Rg
     if mask is not None:
         integrand = integrand * np.asarray(mask, dtype=float)
-    inner = np.trapz(integrand, R, axis=0)
-    return float(np.trapz(inner, Z))
+    inner = np.trapezoid(integrand, R, axis=0)
+    return float(np.trapezoid(inner, Z))
 
 
 def cumulative_emission(x_rhot, thntx_x, dvol_x):

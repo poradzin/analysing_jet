@@ -183,15 +183,15 @@ def zone_emis_on_grid(values_zone, r2d_m, z2d_m, Rg, Zg, inside):
 
 def chord_integral(grid_si, R, Z, w_tor):
     """w_tor * integral eps dR dZ  [n/s] (chord), and the R-integral vs Z."""
-    inner = np.trapz(grid_si, R, axis=0)
-    return float(w_tor * np.trapz(inner, Z)), inner
+    inner = np.trapezoid(grid_si, R, axis=0)
+    return float(w_tor * np.trapezoid(inner, Z)), inner
 
 
 def toroidal_integral(grid_si, R, Z):
     """integral 2*pi*R eps dR dZ  [n/s] (full torus over the chord R,Z area)."""
     Rg, _ = np.meshgrid(R, Z, indexing="ij")
-    inner = np.trapz(grid_si * 2.0 * np.pi * Rg, R, axis=0)
-    return float(np.trapz(inner, Z))
+    inner = np.trapezoid(grid_si * 2.0 * np.pi * Rg, R, axis=0)
+    return float(np.trapezoid(inner, Z))
 
 
 # ----------------------------------------------------------------------
