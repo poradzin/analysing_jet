@@ -31,16 +31,21 @@ What it does
 
 Channels
 --------
-``--channel dd`` (default): THNTX_DD vs BTN4 -- the 2.45 MeV DD neutrons KM14
-separates spectroscopically. ``dt`` uses THNTX_DT vs BTN1 (fast D on thermal T,
-14 MeV). ``--channel`` picks the (thermal, beam-target) pair consistently.
+``--channel total`` (default): the unseparated thermal ``THNTX`` (DD+DT+...)
+versus the sum of every BT component present in ``_neut`` (DD+DT+TT+TD,
+whichever exist) -- the unfolded total neutron rate KM14 sees if no
+spectroscopic separation is applied.
+
+``--channel dd`` and ``--channel dt`` keep the spectroscopically-separated
+DD-only (THNTX_DD vs BTN4, 2.45 MeV) and DT-only (THNTX_DT vs BTN1, 14 MeV)
+options for comparison against KM14's separated yields.
 
 CLI
 ---
-    python los_th_bt_ratio.py 104614 M30 --idx 1 --plot
+    python los_th_bt_ratio.py 104614 M30 --idx 1 --plot          # total (default)
     python los_th_bt_ratio.py 104614 M30 --channel dd --bt-mode zone
 
-Flags: --idx --data-dir --channel {dd,dt} --bt-mode {flux,zone}
+Flags: --idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone}
        --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot
 """
 
@@ -62,10 +67,12 @@ W_TOR_DEFAULT = 0.40
 NR_DEFAULT = 120
 NZ_DEFAULT = 200
 
-# (thermal profile var, beam-target _neut key, label)
+# (thermal profile var, list of beam-target _neut keys to sum, label).
+# An empty bt-key list means "sum every BT component present in _neut".
 CHANNELS = {
-    "dd": ("THNTX_DD", "DD", "DD (2.45 MeV)"),
-    "dt": ("THNTX_DT", "DT", "DT (14 MeV)"),
+    "total": ("THNTX",    [],            "total (DD+DT+TT+TD)"),
+    "dd":    ("THNTX_DD", ["DD"],        "DD (2.45 MeV)"),
+    "dt":    ("THNTX_DT", ["DT"],        "DT (14 MeV)"),
 }
 
 
@@ -129,7 +136,7 @@ def read_thermal_profile(cdf_path, var, tind):
 def read_scalar_totals(cdf_path, tind):
     with Dataset(cdf_path, "r") as d:
         out = {}
-        for k in ("BTNTS_DD", "BTNTS_DT"):
+        for k in ("BTNTS_DD", "BTNTS_DT", "BTNTS_TT", "BTNTS_TD"):
             if k in d.variables:
                 out[k] = float(d[k][tind])
     return out
@@ -198,7 +205,7 @@ def main(argv=None):
     p.add_argument("run_suffix")
     p.add_argument("--idx", type=int, default=None)
     p.add_argument("--data-dir", default=None)
-    p.add_argument("--channel", choices=list(CHANNELS), default="dd")
+    p.add_argument("--channel", choices=list(CHANNELS), default="total")
     p.add_argument("--bt-mode", choices=["flux", "zone"], default="flux",
                    help="beam-target emissivity: flux-surface average (default) "
                         "or per-zone griddata (keeps poloidal asymmetry)")
@@ -223,13 +230,19 @@ def main(argv=None):
     neut_path = run_dir / f"{run_id}_neut_{idx}.cdf"
     cdf_path = run_dir / f"{run_id}.CDF"
 
-    th_var, bt_key, chan_label = CHANNELS[args.channel]
+    th_var, bt_keys_req, chan_label = CHANNELS[args.channel]
 
     fi = bzi.read_fi_distribution(fi_path)
     neut = bzi.read_neut_rates(neut_path)
-    if bt_key not in neut:
-        print(f"Beam-target key {bt_key} not in {neut_path}", file=sys.stderr)
+    # Resolve the BT components to sum: explicit list, or (for "total")
+    # every BT key the _neut file actually provides.
+    available = [k for k in ("DD", "DT", "TT", "TD") if k in neut]
+    bt_keys = bt_keys_req if bt_keys_req else available
+    missing = [k for k in bt_keys if k not in neut]
+    if missing:
+        print(f"Beam-target key(s) {missing} not in {neut_path}", file=sys.stderr)
         return 1
+    bt_zone_sum = sum(neut[k] for k in bt_keys)
     eq = CdfEquilibrium(cdf_path, fi["time"])
     Rb, Zb = read_lcfs(fi_path)
     x_th, th_prof = read_thermal_profile(cdf_path, th_var, eq.tind)
@@ -238,7 +251,8 @@ def main(argv=None):
     print(f"Run dir : {run_dir}")
     print(f"FBM idx : {idx}   t = {fi['time']:.4f} s   "
           f"(equilibrium/thermal slice TIME3[{eq.tind}] = {eq.t_used:.4f} s)")
-    print(f"Channel : {chan_label}   thermal={th_var}  beam-target=BTN[{bt_key}]")
+    print(f"Channel : {chan_label}   thermal={th_var}  "
+          f"beam-target=BTN[{'+'.join(bt_keys)}]")
     print(f"BT mode : {args.bt_mode}")
 
     # chord grid
@@ -256,10 +270,10 @@ def main(argv=None):
 
     # beam-target emissivity on grid
     if args.bt_mode == "flux":
-        x_bt, bt_prof = flux_avg_profile(neut[bt_key], fi["x2d"], fi["bmvol"])
+        x_bt, bt_prof = flux_avg_profile(bt_zone_sum, fi["x2d"], fi["bmvol"])
         bt_grid = profile_on_grid(x_bt, bt_prof, rhot, inside) * 1.0e6
     else:
-        bt_grid = zone_emis_on_grid(neut[bt_key], fi["r2d"] / 100.0,
+        bt_grid = zone_emis_on_grid(bt_zone_sum, fi["r2d"] / 100.0,
                                     fi["z2d"] / 100.0, Rg, Zg, inside) * 1.0e6
 
     # chord and full-torus integrals
@@ -273,7 +287,7 @@ def main(argv=None):
         dvol = np.array(d["DVOL"][eq.tind]) * 1.0e-6   # m^3
         th_all = np.array(d[th_var][eq.tind]) * 1.0e6  # n/m3/s
     th_plasma = float(np.sum(th_all * dvol))
-    bt_plasma = float(np.sum(neut[bt_key] * 1.0e6 * fi["bmvol"] * 1.0e-6))
+    bt_plasma = float(np.sum(bt_zone_sum * fi["bmvol"]))
 
     print("\n==================  KM14 LOS TH / BT  ====================")
     print(f"  TH chord rate   = {th_los:.4e} n/s")
@@ -287,8 +301,15 @@ def main(argv=None):
           f"{(th_los / bt_los) / (th_plasma / bt_plasma):.3f}x")
     print("==========================================================")
     print(f"  TH whole-plasma   = {th_plasma:.4e} n/s")
+    btnts_parts = [(k, totals['BTNTS_' + k]) for k in bt_keys
+                   if ('BTNTS_' + k) in totals]
+    btnts_sum = sum(v for _, v in btnts_parts) if btnts_parts else float('nan')
+    btnts_str = '+'.join(f"BTNTS_{k}" for k, _ in btnts_parts) or 'n/a'
     print(f"  BT whole-plasma   = {bt_plasma:.4e} n/s   "
-          f"(0D BTNTS_{bt_key} = {totals.get('BTNTS_' + bt_key, float('nan')):.4e})")
+          f"(0D {btnts_str} = {btnts_sum:.4e})")
+    if len(btnts_parts) > 1:
+        for k, v in btnts_parts:
+            print(f"     BTNTS_{k:<2} = {v:.4e} n/s")
 
     if (args.plot or args.save) and not args.no_plot:
         make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
