@@ -771,47 +771,87 @@ well as on freia. This is justified because commit 3 showed the BT
 *emission direction* is isotropic to <0.5% for KM14, so the 4π per-zone
 emissivity is the correct thing to line-integrate.
 
-## Result (104614 M30 idx 1, DD channel)
+## Results
 
+**104614 M30 idx 1, DD-only channel** (2.45 MeV, what KM14 spectroscopically separates):
 ```
 (TH/BT)_LOS              = 0.353   (flux mode) / 0.367 (zone mode)
 (TH/BT) whole plasma 0D  = 0.310
 core enhancement LOS/0D  = 1.14x
 ```
+KM14 sees a ~14 % higher thermal fraction than the volume-averaged ratio
+— the chord weights the core differently from the total yield. The
+poloidal-asymmetry correction (flux- vs zone-mode) is only ~4 %.
 
-So KM14 sees a ~14% higher thermal fraction than the volume-averaged
-ratio — the chord weights the core differently from the total yield. The
-poloidal-asymmetry correction (flux- vs zone-mode) is only ~4%.
+**104614 M30 idx 2 (t_TRANSP=13.33 s), `total` channel** (default,
+added 2026-06-09 — see "Channels" below):
+```
+(TH/BT)_LOS              = 0.505
+(TH/BT) whole plasma 0D  = 0.415
+core enhancement LOS/0D  = 1.22x
+TH whole-plasma          = 3.99e17 n/s  (matches los_thermal_rate.py exactly)
+BT whole-plasma          = 9.61e17 n/s  (BTNTS_DD+BTNTS_DT = 9.63e17, 0.1% gap)
+                                          BTNTS_DD = 8.11e15  (0.8%)
+                                          BTNTS_DT = 9.54e17  (99.2%)
+```
+For a DT-campaign run THNTX is dominated by THNTX_DT (~159× THNTX_DD on
+M30); the "total" channel therefore differs from the DD-only channel by
+~160× on the chord and whole-plasma rates.
+
+## Cross-validation with `los_thermal_rate.py` (2026-06-09)
+
+At t_TRANSP=13.33 s on M30, `los_th_bt_ratio.py --channel total` and
+`los_thermal_rate.py` agree on the **thermal whole-plasma rate to
+4 significant figures** (both 3.988e17 n/s) and on the **TH chord rate
+to ~1 %** (4.58e15 vs 4.63e15 n/s). The residual is the equilibrium
+source: `los_th_bt_ratio.py` uses TRANSP `PSIRZ` self-contained;
+`los_thermal_rate.py` uses PPF EFTP via `profiles.Eq`. This confirms
+the chord-integration math is identical in the two scripts and that
+the earlier 160× discrepancy was the channel-variable difference, not
+a bug.
 
 ## Method (CDF-only)
 
 * **Equilibrium** `CdfEquilibrium`: psi(R,Z) from `PSIRZ` (C-order (Z,R)),
   normalized by `PSI0_TR`/`PLFLXA`; rhot(psi_n) inverted from `PLFLX` vs
   `XB`. Bilinear (R,Z)→rhot. LCFS polygon from `_fi` `RSURF/ZSURF[-1]`.
-* **Thermal** eps_TH(rhot): the flux-function `THNTX_<chan>` profile.
-* **Beam-target** eps_BT(rhot): `--bt-mode flux` (default) = BMVOL-weighted
-  flux-surface average of per-zone `BTN4`/`BTN1`; `--bt-mode zone` =
-  per-zone cubic griddata onto the chord (keeps poloidal asymmetry, ~4%
-  effect).
+* **Thermal** eps_TH(rhot): the flux-function `THNTX[_DD|_DT]` profile
+  selected by `--channel` (see below).
+* **Beam-target** eps_BT(rhot): per-zone `BTN4`/`BTN1`/`BTN5`/`BTN7`
+  summed across the keys the active channel selects, then either
+  `--bt-mode flux` (default, BMVOL-weighted flux-surface average) or
+  `--bt-mode zone` (per-zone cubic griddata onto the chord, keeps
+  poloidal asymmetry — ~4% effect).
 * Both mapped onto the KM14 chord grid, chord-integrated. **For the ratio
   the chord geometry (w_tor, 2πR, solid angle) cancels**, so it's robust
   and equilibrium-choice-insensitive (TH and BT see the same surfaces).
 * Cross-checks printed: full-torus ratio (== chord ratio for flux mode),
-  0D whole-plasma ratio, BT whole-plasma vs `sum(BTN4·BMVOL)` and
-  `BTNTS_DD`.
+  0D whole-plasma ratio, BT whole-plasma vs `sum(BTN·BMVOL)` and the
+  matching `BTNTS_*` scalars (sum + per-component breakdown when the
+  channel spans more than one BT key).
 
-## Channels
+## Channels (updated 2026-06-09)
 
-`--channel dd` (default): `THNTX_DD` vs `BTN4` — the 2.45 MeV DD neutrons
-KM14 separates. `dt`: `THNTX_DT` vs `BTN1` (14 MeV). For the pure-DD M29
-run (the real KM14 thermal target) use `dd`.
+* **`--channel total` (default)** — unseparated `THNTX` (DD+DT+...) vs
+  the sum of every BT component present in `_neut` (DD+DT+TT+TD,
+  whichever exist). This is the unfolded total neutron rate KM14 sees
+  if no spectroscopic separation is applied. **Use this to compare
+  against `los_thermal_rate.py`** (which also reads the unseparated
+  `THNTX`).
+* **`--channel dd`** — `THNTX_DD` vs `BTN4` (2.45 MeV), the channel
+  KM14 spectroscopically separates on DT-campaign pulses.
+* **`--channel dt`** — `THNTX_DT` vs `BTN1` (14 MeV).
+
+For the pure-DD M29 run the three channels collapse: `THNTX ≡ THNTX_DD`,
+no DT components in `_neut`.
 
 ## CLI
 ```bash
-python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 1 --plot
+python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 2 --plot       # total (default)
+python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 1 --channel dd # DD-only
 python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --bt-mode zone
 ```
-Flags: `--idx --data-dir --channel {dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot`.
+Flags: `--idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot`.
 Plot (1×4): eps_TH(R,Z), eps_BT(R,Z), local TH/BT, R-integrated vs Z.
 
 ## Open / next
@@ -835,6 +875,12 @@ on the TRANSP CDFs** (netCDF4 + numpy + scipy + matplotlib only — no `ppf`,
 no `profiles.Eq`), so they run in the local WSL dev env, on freia and on
 heimdall alike. Run them **from inside `src/neutron/km14/`** (they import each
 other as plain modules, e.g. `import bt_kinematics`).
+
+**numpy ≥ 2.0** is required by `los_th_bt_ratio.py` and `los_thermal_rate.py`
+since 2026-06-09: the deprecated `np.trapz` was migrated to `np.trapezoid`
+to silence the deprecation warnings. On older numpy the integrals will
+`AttributeError`; swap to `from scipy.integrate import trapezoid` if you
+need to run on a legacy env.
 
 ```bash
 cd ~/jet/analysing_jet/src/neutron/km14
