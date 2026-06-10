@@ -285,6 +285,14 @@ class EqPPF:
     label = "PPF equilibrium"
 
     def __init__(self, pulse, dda, uid, seq, time_jet):
+        # profiles.py / change_rho.py live in src/ (two levels up from this
+        # km14/ dir), which is not on sys.path when the script is run directly
+        # -- only the script's own dir is. Add src/ before the lazy import.
+        import os
+        src_dir = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
+        if src_dir not in sys.path:
+            sys.path.append(src_dir)
         import profiles as ps
         from change_rho import psin_to_sqrt_ftor_norm
         self._psin_to_rhot = psin_to_sqrt_ftor_norm
