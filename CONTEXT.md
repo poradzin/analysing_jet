@@ -136,7 +136,7 @@ the full Z range rather than one half times two.
 
 ---
 
-# `los_thermal_rate.py` — context (added 2026-05-25)
+# `los_thermal_rate.py` — context (added 2026-05-25, CDF-default rewrite 2026-06-10)
 
 `src/neutron/km14/los_thermal_rate.py` is the **realistic** version of the
 KM14 line-integrated thermal-neutron estimate, replacing the geometric
@@ -145,6 +145,38 @@ grid covering the LOS, maps it to rhot via the actual EFIT PSI, and does a
 proper 2-D trapezoidal integral. It then converts to a TRANSP-equivalent
 flux-shell integral, finds the equivalent `rho_bnd`, and produces a
 LOS-weighted emissivity profile `THKM14(rhot)`.
+
+## Equilibrium source — CDF default, ppf opt-in (2026-06-10)
+
+The script is now **self-contained on the TRANSP CDFs by default** (like
+`los_th_bt_ratio.py`) so it runs in the WSL dev env without `ppf`:
+
+* `--eq-source cdf` (**default**) reuses `CdfEquilibrium` from
+  `los_th_bt_ratio` for rhot(R,Z) (`PSIRZ`/`PSI0_TR`/`PLFLXA` +
+  `PLFLX`-vs-`XB`), magnetic axis from `RAXIS`/`YAXIS`, and the **LCFS from
+  the time-resolved asymmetric boundary Fourier moments**
+  (`RMCB*`/`RMSB*`/`YMCB*`/`YMSB*`, reconstructed by `_boundary_from_moments`;
+  matches the `_fi` RSURF/ZSURF outer surface to ~1e-4 cm, and works at any
+  time, not just FBM indices). Run-dir search via `bt_zone_integrator.find_run_dir`.
+* `--eq-source ppf` uses the old PPF EFTP path via `profiles.Eq` +
+  `change_rho.psin_to_sqrt_ftor_norm`, **imported lazily inside
+  `EqPPF.__init__`** — the module top-level no longer imports `profiles`,
+  `change_rho` or `ppf`, so the default path needs none of them.
+* The two paths share one interface (`EqCDF`/`EqPPF`: `rhot_on_grid`, `lcfs`,
+  `native_rhot`, `z_extent`, `Rmag/Zmag`, `tind`, `t_eq_jet`, `label`); the
+  whole downstream integration/`rho_bnd`/`THKM14` math is source-agnostic.
+* **Thermal profile + DVOL are always read straight from the main CDF**
+  (`read_thermal_slice`), so `profiles.Transp` is gone too.
+* New `--channel {total,dd,dt}` selects `THNTX`/`THNTX_DD`/`THNTX_DT`
+  (matches the sister script). New `--data-dir`. `--runid` is the run suffix
+  (e.g. `M30`), not the full id.
+
+**Cross-validation (2026-06-10, 104614 M30, t_TRANSP=13.33 s, slice [56]):**
+in CDF mode `los_thermal_rate.py --channel total` and
+`los_th_bt_ratio.py --idx 2` now agree **exactly** — TH chord 4.5753e15 n/s,
+TH whole-plasma 3.9877e17 n/s — because both use the same TRANSP `PSIRZ`
+equilibrium (the earlier ~1% residual was the PPF-vs-CDF equilibrium
+difference, now eliminated when CDF mode is used on both). `rho_bnd ≈ 0.307`.
 
 ## Geometry
 

@@ -12,7 +12,7 @@ The KM14 LOS is a vertical chord (constant toroidal angle) located above
 the JET vessel. In the (R, Z) poloidal plane it spans
 
     R in [R_MIN, R_MAX]   (default: 2.7 m .. 3.1 m)
-    Z covering the plasma vertical extent (default: LCFS Z range +/- margin)
+    Z covering the plasma vertical extent (default: equilibrium Z box)
 
 A fixed effective toroidal width ``W_TOR`` (default 0.4 m) closes the
 chord cross section so the volume element is
@@ -21,53 +21,60 @@ chord cross section so the volume element is
 
 (this is the same convention used by ``estimate_outer_th_fraction.py``).
 
+Equilibrium source
+~~~~~~~~~~~~~~~~~~
+By default the equilibrium (rhot(R, Z) map + LCFS) is taken **self-contained
+from the TRANSP main CDF** (``--eq-source cdf``), exactly like
+``los_th_bt_ratio.py``: psi(R, Z) from ``PSIRZ``, normalized by
+``PSI0_TR``/``PLFLXA``, with rhot(psi_n) inverted from ``PLFLX`` vs ``XB``;
+the LCFS is reconstructed from the time-resolved asymmetric boundary Fourier
+moments (``RMCB*``/``RMSB*``/``YMCB*``/``YMSB*``). This needs no ``ppf`` and
+therefore runs in the WSL dev env, on freia and on heimdall alike.
+
+Passing ``--eq-source ppf`` instead uses a JET PPF equilibrium (default DDA
+``eftp``) via ``profiles.Eq`` and ``change_rho`` -- those modules are imported
+**lazily**, only when this option is selected, so the default CDF path does not
+require ``ppf`` to be importable.
+
+The thermal emissivity profile and DVOL are read directly from the TRANSP main
+CDF in both modes.
+
 Algorithm
 ~~~~~~~~~
-1.  Take the Eq class's pre-computed ``eq._psirzmg`` and
-    ``eq._psi_norm[tind]`` (already normalized PSIN on the native EFIT
-    grid). They share the same C-order flat layout, so ravel'd
-    coordinates and values pair correctly with no reshape ambiguity.
-2.  Append the magnetic-axis point ``(RMAG, ZMAG, PSIN=0)`` to anchor
-    the centre.
-3.  ``griddata`` cubic from this scattered set onto a dense (R, Z)
-    meshgrid (default 100 x 100) covering the LOS extent; linear
-    fallback for edge NaNs.
-4.  Build the inside-LCFS mask as a point-in-polygon test against
-    ``(RBND, ZBND)`` (closed boundary). This excludes the private flux
-    region below the X-point, which is where ``psin < 1`` but TRANSP
-    does not model emission. Then clip ``psin`` to [0, 1] and map to
-    ``rhot = sqrt(normalized toroidal flux)`` via
-    ``psin_to_sqrt_ftor_norm``.
-5.  PCHIP-interpolate the TRANSP ``THNTX(X)`` profile (X = rhot) onto the
-    dense rhot map; set ``THNTX = 0`` outside the LCFS.
-6.  Convert ``THNTX`` from TRANSP CGS units (N/CM3/SEC) to SI (n/m3/s)
-    and integrate using the trapezoidal rule:
+1.  Map a dense (R, Z) chord grid to ``rhot`` using the selected equilibrium.
+2.  Build the inside-LCFS mask as a point-in-polygon test against the closed
+    LCFS boundary. This excludes the private flux region below the X-point,
+    where ``psin < 1`` but TRANSP does not model emission.
+3.  PCHIP-interpolate the TRANSP ``THNTX[_<chan>](X)`` profile (X = rhot) onto
+    the dense rhot map; set ``THNTX = 0`` outside the LCFS.
+4.  Convert ``THNTX`` from TRANSP CGS units (N/CM3/SEC) to SI (n/m3/s) and
+    integrate using the trapezoidal rule:
 
         Rate_LOS [n/s] = W_TOR * integral over R, Z of THNTX(R, Z) dR dZ
 
 Usage
 -----
-    python los_thermal_rate.py 104614 M29 \
+    # default: self-contained CDF equilibrium
+    python los_thermal_rate.py 104614 M30 -t 53.5268 --plot
+
+    # PPF equilibrium (Heimdall / freia, imports ppf lazily)
+    python los_thermal_rate.py 104614 M29 --eq-source ppf \
             --dda eftp --uid gszepesi --seq 405 -t 53.5268 --plot
 
 The convenience ``key=value`` form (e.g. ``dda='eftp'``) is also accepted.
 """
 
 import argparse
-import os
 import sys
 
 import numpy as np
 import matplotlib.pyplot as plt
+from netCDF4 import Dataset
 from matplotlib.path import Path as MplPath
-from scipy.interpolate import PchipInterpolator, griddata
+from scipy.interpolate import PchipInterpolator
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SRC_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
-sys.path.append(SRC_DIR)
-
-import profiles as ps
-from change_rho import psin_to_sqrt_ftor_norm
+import bt_zone_integrator as bzi
+from los_th_bt_ratio import CdfEquilibrium
 
 
 # -----------------------------------------------------------------------------
@@ -79,6 +86,13 @@ W_TOR_DEFAULT = 0.40   # effective toroidal width of the chord [m]
 NR_DEFAULT = 100
 NZ_DEFAULT = 100
 Z_MARGIN_DEFAULT = 0.0  # extra Z padding beyond LCFS [m]
+
+# Thermal-emissivity CDF variable per channel.
+CHANNELS = {
+    "total": ("THNTX",    "total (DD+DT+...)"),
+    "dd":    ("THNTX_DD",  "DD (2.45 MeV)"),
+    "dt":    ("THNTX_DT",  "DT (14 MeV)"),
+}
 
 
 # -----------------------------------------------------------------------------
@@ -107,13 +121,23 @@ def parse_args(argv=None):
                     'vertical LOS volume.',
     )
     parser.add_argument('pulse', type=int, help='JET pulse number')
-    parser.add_argument('runid', type=str, help='TRANSP runid (e.g. M29)')
+    parser.add_argument('runid', type=str, help='TRANSP run suffix (e.g. M29)')
+    parser.add_argument('--eq-source', choices=['cdf', 'ppf'], default='cdf',
+                        help='Equilibrium source: self-contained TRANSP CDF '
+                             '(default) or JET PPF (lazily imports ppf).')
+    parser.add_argument('--channel', choices=list(CHANNELS), default='total',
+                        help='Thermal channel: total=THNTX (default), '
+                             'dd=THNTX_DD, dt=THNTX_DT.')
+    parser.add_argument('--data-dir', default=None,
+                        help='Base data dir for the run CDFs '
+                             '(<base>/<pulse>/<runid>). Falls back to '
+                             '~/jet/data then the heimdall results tree.')
     parser.add_argument('--dda', type=str, default='eftp',
-                        help='Equilibrium PPF DDA (default: eftp)')
+                        help='[ppf mode] Equilibrium PPF DDA (default: eftp)')
     parser.add_argument('--uid', type=str, default='jetppf',
-                        help='Equilibrium PPF UID (default: jetppf)')
+                        help='[ppf mode] Equilibrium PPF UID (default: jetppf)')
     parser.add_argument('--seq', type=int, default=0,
-                        help='Equilibrium PPF sequence (default: 0)')
+                        help='[ppf mode] Equilibrium PPF sequence (default: 0)')
     parser.add_argument('-t', '--time', type=float, default=None,
                         help='Time in JET convention (s, t>40). '
                              'If omitted, the midpoint of the TRANSP run is used.')
@@ -143,83 +167,200 @@ def parse_args(argv=None):
 
 
 # -----------------------------------------------------------------------------
-# TRANSP / equilibrium loading
+# Thermal profiles from the TRANSP main CDF
 # -----------------------------------------------------------------------------
-def get_transp_slice(tr, time_jet):
-    """Return (THNTX, rhot, trind) at the JET time *time_jet*."""
-    t_jet_grid = tr.t + 40.0
-    trind = int(np.abs(t_jet_grid - time_jet).argmin())
-
-    thntx_all = tr.profile('THNTX')
-    x_all = tr.x
-
-    thntx = thntx_all[trind] if thntx_all.ndim == 2 else thntx_all
-    x_rhot = x_all[trind] if x_all.ndim == 2 else x_all
-    return thntx, x_rhot, trind
+def read_time_grid(cdf_path):
+    """Return TIME3 (TRANSP seconds) from the main CDF."""
+    with Dataset(cdf_path, "r") as d:
+        return np.array(d["TIME3"][:])
 
 
-def build_rz_grid(eq, tind_eq, Rmin, Rmax, nR, nZ, z_margin):
+def read_thermal_slice(cdf_path, th_var, trind):
+    """Return (thntx, x_rhot, dvol, thntx_to_si, dvol_to_m3, units) at *trind*."""
+    with Dataset(cdf_path, "r") as d:
+        if th_var not in d.variables:
+            raise KeyError(f"{th_var} not present in {cdf_path}")
+        thntx = np.array(d[th_var][trind])
+        x_rhot = np.array(d["X"][trind])
+        dvol = np.array(d["DVOL"][trind])
+        unit_th = getattr(d[th_var], "units", "") or ""
+        unit_dv = getattr(d["DVOL"], "units", "") or ""
+    thntx_to_si = 1.0e6 if 'CM' in unit_th.upper() else 1.0   # N/CM3/SEC -> n/m3/s
+    dvol_to_m3 = 1.0e-6 if 'CM' in unit_dv.upper() else 1.0   # CM**3 -> m^3
+    return thntx, x_rhot, dvol, thntx_to_si, dvol_to_m3, unit_th
+
+
+# -----------------------------------------------------------------------------
+# Equilibrium sources -- common interface used by main()
+#
+#   .tind        thermal/eq time index on the relevant time grid (int)
+#   .t_eq_jet    equilibrium time in JET convention [s]
+#   .label       human-readable source description
+#   .Rmag, .Zmag magnetic axis [m]
+#   .z_extent()  -> (z_bot, z_top) computational-box Z range [m]
+#   .lcfs()      -> (Rb, Zb) closed LCFS polygon [m]
+#   .rhot_on_grid(R, Z) -> (rhot, inside, psin_dense) on the (nR, nZ) grid
+#   .native_rhot()      -> (Rg_n, Zg_n, rhot_native) masked to the LCFS, or None
+# -----------------------------------------------------------------------------
+def _boundary_from_moments(d, tind, ntheta=257):
+    """Reconstruct the LCFS (R, Z) [m] from TRANSP asymmetric boundary moments.
+
+    TRANSP stores the plasma boundary as a Fourier series in a poloidal angle:
+
+        R(theta) = RMCB0 + sum_{n>=1} [RMCBn cos(n th) + RMSBn sin(n th)]
+        Z(theta) = YMCB0 + sum_{n>=1} [YMCBn cos(n th) + YMSBn sin(n th)]
+
+    (units cm in the CDF). Verified to reproduce the ``_fi`` RSURF/ZSURF
+    outermost surface to ~1e-4 cm on 104614 M30.
+    """
+    th = np.linspace(0.0, 2.0 * np.pi, ntheta)
+    R = np.zeros_like(th)
+    Z = np.zeros_like(th)
+    n = 0
+    while f"RMCB{n}" in d.variables:
+        R += float(d[f"RMCB{n}"][tind]) * np.cos(n * th)
+        Z += float(d[f"YMCB{n}"][tind]) * np.cos(n * th)
+        if n >= 1 and f"RMSB{n}" in d.variables:
+            R += float(d[f"RMSB{n}"][tind]) * np.sin(n * th)
+            Z += float(d[f"YMSB{n}"][tind]) * np.sin(n * th)
+        n += 1
+    return R / 100.0, Z / 100.0
+
+
+class EqCDF:
+    """Self-contained equilibrium from the TRANSP main CDF (no ppf)."""
+
+    label = "TRANSP CDF (PSIRZ + boundary moments)"
+
+    def __init__(self, cdf_path, time_jet):
+        self.ceq = CdfEquilibrium(cdf_path, time_jet - 40.0)  # TRANSP time
+        self.tind = self.ceq.tind
+        self.t_eq_jet = self.ceq.t_used + 40.0
+        self.RG = self.ceq.RG
+        self.ZG = self.ceq.ZG
+        with Dataset(cdf_path, "r") as d:
+            self.Rmag = float(d["RAXIS"][self.tind]) / 100.0
+            self.Zmag = float(d["YAXIS"][self.tind]) / 100.0
+            self._Rb, self._Zb = _boundary_from_moments(d, self.tind)
+
+    def z_extent(self):
+        return float(self.ZG.min()), float(self.ZG.max())
+
+    def lcfs(self):
+        return self._Rb, self._Zb
+
+    def _psin_on(self, R, Z):
+        """Bilinear (unclipped) normalized psi at (R, Z) [m] -- for contours."""
+        RG, ZG = self.RG, self.ZG
+        ir = np.clip(np.searchsorted(RG, R) - 1, 0, len(RG) - 2)
+        iz = np.clip(np.searchsorted(ZG, Z) - 1, 0, len(ZG) - 2)
+        tr = (R - RG[ir]) / (RG[ir + 1] - RG[ir])
+        tz = (Z - ZG[iz]) / (ZG[iz + 1] - ZG[iz])
+        P = self.ceq.psin
+        return (P[iz, ir] * (1 - tr) * (1 - tz) + P[iz, ir + 1] * tr * (1 - tz)
+                + P[iz + 1, ir] * (1 - tr) * tz + P[iz + 1, ir + 1] * tr * tz)
+
+    def rhot_on_grid(self, R, Z):
+        Rg, Zg = np.meshgrid(R, Z, indexing='ij')
+        flatR, flatZ = Rg.ravel(), Zg.ravel()
+        rhot = self.ceq.rhot(flatR, flatZ).reshape(Rg.shape)
+        psin_dense = self._psin_on(flatR, flatZ).reshape(Rg.shape)
+        inside = MplPath(np.column_stack(self.lcfs())).contains_points(
+            np.column_stack([flatR, flatZ])).reshape(Rg.shape)
+        return rhot, inside, psin_dense
+
+    def native_rhot(self):
+        Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
+        psin_clip = np.clip(self.ceq.psin, 0.0, 1.0)
+        rhot = np.clip(np.interp(psin_clip.ravel(), self.ceq._psin_b,
+                                 self.ceq._rhot_b), 0.0, 1.0).reshape(Rg_n.shape)
+        mask = MplPath(np.column_stack(self.lcfs())).contains_points(
+            np.column_stack([Rg_n.ravel(), Zg_n.ravel()])).reshape(Rg_n.shape)
+        return Rg_n, Zg_n, np.where(mask, rhot, np.nan)
+
+
+class EqPPF:
+    """JET PPF equilibrium via profiles.Eq (imports ppf lazily)."""
+
+    label = "PPF equilibrium"
+
+    def __init__(self, pulse, dda, uid, seq, time_jet):
+        import profiles as ps
+        from change_rho import psin_to_sqrt_ftor_norm
+        self._psin_to_rhot = psin_to_sqrt_ftor_norm
+        self.eq = ps.Eq(pulse, dda=dda, uid=uid, seq=seq)
+        self.time_jet = time_jet
+        self.tind = int(np.abs(self.eq.t - time_jet).argmin())
+        self.t_eq_jet = float(self.eq.t[self.tind])
+        self.Rmag = float(self.eq._Rmag[self.tind])
+        self.Zmag = float(self.eq._Zmag[self.tind])
+        self.label = f"PPF equilibrium {dda}/{uid}/{seq}"
+
+    def z_extent(self):
+        PSIZ = np.asarray(self.eq._psiz)
+        return float(np.nanmin(PSIZ)), float(np.nanmax(PSIZ))
+
+    def lcfs(self):
+        return _lcfs_contour(self.eq, self.tind)
+
+    def rhot_on_grid(self, R, Z):
+        from scipy.interpolate import griddata
+        eq, tind_eq = self.eq, self.tind
+        Rg_n = np.asarray(eq._psirzmg[0])
+        Zg_n = np.asarray(eq._psirzmg[1])
+        psin_flat = np.asarray(eq._psi_norm[tind_eq]).ravel()
+
+        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag]])
+        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag]])
+        pts_psin = np.concatenate([psin_flat, [0.0]])
+
+        Rg, Zg = np.meshgrid(R, Z, indexing='ij')
+        query = np.column_stack([Rg.ravel(), Zg.ravel()])
+
+        psin_dense = griddata((pts_R, pts_Z), pts_psin, query, method='cubic')
+        if np.any(np.isnan(psin_dense)):
+            psin_lin = griddata((pts_R, pts_Z), pts_psin, query, method='linear')
+            psin_dense = np.where(np.isnan(psin_dense), psin_lin, psin_dense)
+        psin_dense = psin_dense.reshape(Rg.shape)
+
+        Rb, Zb = self.lcfs()
+        inside = MplPath(np.column_stack([Rb, Zb])).contains_points(
+            query).reshape(Rg.shape)
+
+        psin_clipped = np.clip(np.where(np.isnan(psin_dense), 1.0, psin_dense),
+                               0.0, 1.0)
+        rhot = self._psin_to_rhot(psin_clipped.ravel(), eq, self.time_jet)
+        rhot = np.asarray(rhot).reshape(Rg.shape)
+        return rhot, inside, psin_dense
+
+    def native_rhot(self):
+        eq, tind_eq = self.eq, self.tind
+        Rg_n = np.asarray(eq._psirzmg[0])
+        Zg_n = np.asarray(eq._psirzmg[1])
+        psin_native = np.asarray(eq._psi_norm[tind_eq]).reshape(Rg_n.shape)
+        psin_clip = np.clip(np.where(np.isnan(psin_native), 1.0, psin_native),
+                            0.0, 1.0)
+        rhot = self._psin_to_rhot(
+            psin_clip.ravel(), eq, self.time_jet).reshape(Rg_n.shape)
+        Rb, Zb = self.lcfs()
+        mask = MplPath(np.column_stack([Rb, Zb])).contains_points(
+            np.column_stack([Rg_n.ravel(), Zg_n.ravel()])).reshape(Rg_n.shape)
+        return Rg_n, Zg_n, np.where(mask, rhot, np.nan)
+
+
+# -----------------------------------------------------------------------------
+# LOS grid + emissivity (source-agnostic)
+# -----------------------------------------------------------------------------
+def build_rz_grid(z_bot, z_top, Rmin, Rmax, nR, nZ, z_margin):
     """Build a (nR x nZ) Cartesian grid covering the LOS region.
 
-    The Z range is taken from the EFIT computational box ``eq._psiz`` (the
-    whole vessel), not from ZBND. We saw on pulse 104614 that ``_Zbnd``
-    appears to be transposed relative to its reshape parameter and slicing
-    with ``[:, tind_eq]`` returns a single boundary point sampled over the
-    full discharge -- giving a spuriously narrow Z range. Using the PSI
-    grid is robust: vacuum points get zeroed out by the rhot >= 1 mask.
+    The Z range is taken from the equilibrium computational box (the whole
+    vessel), not from the LCFS extent: vacuum points are zeroed out by the
+    inside-LCFS polygon mask.
     """
-    PSIZ = np.asarray(eq._psiz)
-    z_bot = float(np.nanmin(PSIZ))
-    z_top = float(np.nanmax(PSIZ))
-
     R = np.linspace(Rmin, Rmax, nR)
     Z = np.linspace(z_bot - z_margin, z_top + z_margin, nZ)
-    return R, Z, z_bot, z_top
-
-
-def map_grid_to_rhot(R, Z, eq, tind_eq, time_jet):
-    """Return rhot(R, Z), inside-LCFS mask, and the raw psin map.
-
-    Uses the Eq class's pre-computed structures directly so there is no
-    chance of mismatching coordinate ordering with values:
-        * ``eq._psirzmg`` -- meshgrid of (psir, psiz) with default
-          ``indexing='xy'`` so axis 0 = Z, axis 1 = R.
-        * ``eq._psi_norm[tind]`` -- flat 1D array stored in the *same*
-          C-order, so ravel'd coordinates and values pair correctly.
-
-    The ``inside`` mask is the closed LCFS polygon test on (RBND, ZBND),
-    NOT ``psin <= 1``. The latter would include the private flux region
-    below the X-point -- ``psin`` is < 1 there but TRANSP does not model
-    emission outside the confined plasma, so including the PFR would
-    bias the integral upward by a small but spurious amount.
-    """
-    Rg_n = np.asarray(eq._psirzmg[0])
-    Zg_n = np.asarray(eq._psirzmg[1])
-    psin_flat = np.asarray(eq._psi_norm[tind_eq]).ravel()
-
-    pts_R = np.concatenate([Rg_n.ravel(), [float(eq._Rmag[tind_eq])]])
-    pts_Z = np.concatenate([Zg_n.ravel(), [float(eq._Zmag[tind_eq])]])
-    pts_psin = np.concatenate([psin_flat, [0.0]])
-
-    Rg, Zg = np.meshgrid(R, Z, indexing='ij')  # (nR, nZ)
-    query = np.column_stack([Rg.ravel(), Zg.ravel()])
-
-    psin_dense = griddata((pts_R, pts_Z), pts_psin, query, method='cubic')
-    if np.any(np.isnan(psin_dense)):
-        psin_lin = griddata((pts_R, pts_Z), pts_psin, query, method='linear')
-        psin_dense = np.where(np.isnan(psin_dense), psin_lin, psin_dense)
-    psin_dense = psin_dense.reshape(Rg.shape)
-
-    # Inside-LCFS mask from the closed boundary polygon -- excludes the PFR.
-    Rb, Zb = _lcfs_contour(eq, tind_eq)
-    lcfs_poly = MplPath(np.column_stack([Rb, Zb]))
-    inside = lcfs_poly.contains_points(query).reshape(Rg.shape)
-
-    psin_clipped = np.clip(np.where(np.isnan(psin_dense), 1.0, psin_dense),
-                           0.0, 1.0)
-    rhot = psin_to_sqrt_ftor_norm(psin_clipped.ravel(), eq, time_jet)
-    rhot = np.asarray(rhot).reshape(Rg.shape)
-    return rhot, inside, psin_dense, Rg, Zg
+    return R, Z
 
 
 def thntx_on_grid(x_rhot, thntx_x, rhot_grid, inside_mask):
@@ -276,19 +417,6 @@ def toroidal_rate(thntx_grid_si, R, Z, mask=None):
         integrand = integrand * np.asarray(mask, dtype=float)
     inner = np.trapezoid(integrand, R, axis=0)
     return float(np.trapezoid(inner, Z))
-
-
-def cumulative_emission(x_rhot, thntx_x, dvol_x):
-    """Return (xs_sorted, cumsum(THNTX*DVOL)) on the TRANSP rhot grid [n/s].
-
-    Note: THNTX * DVOL has units of n/s regardless of CGS vs SI
-    (N/CM3/SEC * CM**3 = N/SEC), so no conversion is needed.
-    """
-    order = np.argsort(x_rhot)
-    xs = np.asarray(x_rhot)[order]
-    th = np.asarray(thntx_x)[order]
-    dv = np.asarray(dvol_x)[order]
-    return xs, np.cumsum(th * dv)
 
 
 def find_rho_bnd(target, xs, cum_emis):
@@ -455,8 +583,8 @@ def _lcfs_contour(eq, tind_eq):
 
 
 def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
-                     eq, tind_eq, pulse, runid, time_jet,
-                     Rmag, Zmag, rho_bnd=None,
+                     Rb, Zb, native, pulse, runid, time_jet, t_eq_jet,
+                     eq_label, chan_label, Rmag, Zmag, rho_bnd=None,
                      xs=None, thntx_si_prof=None,
                      thkm14_si_prof=None, f_prof=None):
     """Six-panel (2x3) diagnostic:
@@ -470,25 +598,7 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')
     rhot_plot = np.where(inside, rhot, np.nan)
 
-    Rb, Zb = _lcfs_contour(eq, tind_eq)
-
-    # Vessel-wide rhot map for the poloidal overview panel (used to draw
-    # the rho_bnd surface across the whole plasma). Masked outside the LCFS
-    # polygon so we don't trace spurious contours in the PFR or vacuum.
-    Rg_n = np.asarray(eq._psirzmg[0])
-    Zg_n = np.asarray(eq._psirzmg[1])
-    psin_native = np.asarray(eq._psi_norm[tind_eq]).reshape(Rg_n.shape)
-    psin_native_clip = np.clip(
-        np.where(np.isnan(psin_native), 1.0, psin_native), 0.0, 1.0
-    )
-    rhot_native = psin_to_sqrt_ftor_norm(
-        psin_native_clip.ravel(), eq, time_jet
-    ).reshape(Rg_n.shape)
-    lcfs_poly = MplPath(np.column_stack([Rb, Zb]))
-    native_mask = lcfs_poly.contains_points(
-        np.column_stack([Rg_n.ravel(), Zg_n.ravel()])
-    ).reshape(Rg_n.shape)
-    rhot_native = np.where(native_mask, rhot_native, np.nan)
+    Rg_n, Zg_n, rhot_native = native
 
     rho_bnd_lbl = (f'rho_bnd = {rho_bnd:.4f}'
                    if rho_bnd is not None and np.isfinite(rho_bnd)
@@ -497,15 +607,17 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     fig, axes = plt.subplots(2, 3, figsize=(17.0, 10.0))
     fig.suptitle(
         f'KM14 LOS thermal-neutron rate  -  pulse {pulse}  TRANSP {runid}  '
-        f't_JET={time_jet:.3f}s  t_EQ={eq.t[tind_eq]:.3f}s'
+        f'{chan_label}\n'
+        f't_JET={time_jet:.3f}s  t_EQ={t_eq_jet:.3f}s  ({eq_label})'
     )
 
     ax1 = axes[0, 0]
     pc1 = ax1.pcolormesh(Rg, Zg, rhot_plot, shading='auto', cmap='viridis')
     fig.colorbar(pc1, ax=ax1, label='rhot')
-    ax1.plot(Rb, Zb, 'w-', lw=1.2, label='LCFS (RBND,ZBND)')
-    ax1.contour(Rg, Zg, psin_dense, levels=[1.0],
-                colors='white', linewidths=0.8, linestyles='--')
+    ax1.plot(Rb, Zb, 'w-', lw=1.2, label='LCFS')
+    if psin_dense is not None:
+        ax1.contour(Rg, Zg, psin_dense, levels=[1.0],
+                    colors='white', linewidths=0.8, linestyles='--')
     if rho_bnd is not None and np.isfinite(rho_bnd):
         ax1.contour(Rg, Zg, rhot, levels=[rho_bnd],
                     colors='magenta', linewidths=1.4)
@@ -537,10 +649,11 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax3 = axes[1, 0]
     ax3.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
     if rho_bnd is not None and np.isfinite(rho_bnd):
-        cs = ax3.contour(Rg_n, Zg_n, rhot_native, levels=[rho_bnd],
-                         colors='magenta', linewidths=1.4)
-        if cs.collections:
-            cs.collections[0].set_label(rho_bnd_lbl)
+        ax3.contour(Rg_n, Zg_n, rhot_native, levels=[rho_bnd],
+                    colors='magenta', linewidths=1.4)
+        # Proxy handle for the legend: QuadContourSet.collections was removed
+        # in matplotlib 3.8, so attach the label via an empty line instead.
+        ax3.plot([], [], color='magenta', lw=1.4, label=rho_bnd_lbl)
     ax3.plot([Rmag], [Zmag], 'r+', ms=10, label=f'axis ({Rmag:.3f}, {Zmag:.3f})')
     los_box_R = [R[0], R[-1], R[-1], R[0], R[0]]
     los_box_Z = [Z[0], Z[0], Z[-1], Z[-1], Z[0]]
@@ -607,53 +720,57 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
 def main(argv=None):
     args = parse_args(argv)
 
-    # ------- TRANSP -----------------------------------------------------
-    print(f'Loading TRANSP pulse {args.pulse} run {args.runid} ...')
-    tr = ps.Transp(args.pulse, args.runid)
+    run_id = f"{args.pulse}{args.runid}"
+    run_dir = bzi.find_run_dir(args.pulse, args.runid, args.data_dir)
+    cdf_path = run_dir / f"{run_id}.CDF"
+    th_var, chan_label = CHANNELS[args.channel]
+    print(f'Run dir : {run_dir}')
+    print(f'Channel : {chan_label}  (thermal var = {th_var})')
 
-    t_jet_grid = tr.t + 40.0
+    # ------- Time / thermal slice from the main CDF ---------------------
+    t_jet_grid = read_time_grid(cdf_path) + 40.0
     if args.time is None:
         time_jet = float(t_jet_grid[len(t_jet_grid) // 2])
         print(f'No time supplied; using midpoint t_JET = {time_jet:.3f} s.')
     else:
         time_jet = float(args.time)
+    trind = int(np.abs(t_jet_grid - time_jet).argmin())
 
-    thntx_x, x_rhot, trind = get_transp_slice(tr, time_jet)
-
-    tr.add_data('THNTX')
-    unit_th = tr.units('THNTX') or ''
-    # TRANSP THNTX is in N/CM3/SEC; convert to N/M3/SEC for the integral.
-    thntx_to_si = 1.0e6 if 'CM' in unit_th.upper() else 1.0
+    (thntx_x, x_rhot, dvol_x, thntx_to_si,
+     dvol_to_m3, unit_th) = read_thermal_slice(cdf_path, th_var, trind)
 
     print(f'TRANSP slice [{trind}]: t_JET = {t_jet_grid[trind]:.3f} s '
-          f'(t_TRANSP = {tr.t[trind]:.3f} s)')
-    print(f'  THNTX units = [{unit_th}],  conversion to n/m3/s = {thntx_to_si:.1e}')
-    print(f'  THNTX(rhot=0) = {thntx_x[0]:.3e} [{unit_th}]  '
+          f'(t_TRANSP = {t_jet_grid[trind] - 40.0:.3f} s)')
+    print(f'  {th_var} units = [{unit_th}],  conversion to n/m3/s = '
+          f'{thntx_to_si:.1e}')
+    print(f'  {th_var}(rhot=0) = {thntx_x[0]:.3e} [{unit_th}]  '
           f'= {thntx_x[0] * thntx_to_si:.3e} n/m3/s')
 
     # ------- Equilibrium ------------------------------------------------
-    print(f'Loading equilibrium PPF {args.dda}/{args.uid}/{args.seq} ...')
-    eq = ps.Eq(args.pulse, dda=args.dda, uid=args.uid, seq=args.seq)
-    tind_eq = int(np.abs(eq.t - time_jet).argmin())
-    Rmag = float(eq._Rmag[tind_eq])
-    Zmag = float(eq._Zmag[tind_eq])
-    print(f'Equilibrium slice [{tind_eq}]: t = {eq.t[tind_eq]:.3f} s')
+    if args.eq_source == 'ppf':
+        print(f'Equilibrium: PPF {args.dda}/{args.uid}/{args.seq} '
+              f'(importing ppf) ...')
+        eqs = EqPPF(args.pulse, args.dda, args.uid, args.seq, time_jet)
+    else:
+        print('Equilibrium: TRANSP CDF (self-contained, no ppf) ...')
+        eqs = EqCDF(cdf_path, time_jet)
+    Rmag, Zmag = eqs.Rmag, eqs.Zmag
+    print(f'Equilibrium slice: t = {eqs.t_eq_jet:.3f} s   [{eqs.label}]')
     print(f'  Rmag = {Rmag:.3f} m, Zmag = {Zmag:.3f} m')
 
     # ------- LOS grid ---------------------------------------------------
-    R, Z, z_bot, z_top = build_rz_grid(
-        eq, tind_eq, args.Rmin, args.Rmax, args.nR, args.nZ, args.zmargin
-    )
+    z_bot, z_top = eqs.z_extent()
+    R, Z = build_rz_grid(z_bot, z_top, args.Rmin, args.Rmax,
+                         args.nR, args.nZ, args.zmargin)
     print(f'  LOS R in [{R[0]:.3f}, {R[-1]:.3f}] m  ({args.nR} samples)')
     print(f'  LOS Z in [{Z[0]:.3f}, {Z[-1]:.3f}] m  ({args.nZ} samples) '
-          f'[EFIT PSIZ extent: {z_bot:.3f} .. {z_top:.3f}]')
+          f'[box Z extent: {z_bot:.3f} .. {z_top:.3f}]')
     print(f'  LOS centre R_c = {0.5 * (R[0] + R[-1]):.3f} m, '
           f'Rmag - R_c = {Rmag - 0.5 * (R[0] + R[-1]):+.3f} m')
 
     # ------- (R, Z) -> rhot --------------------------------------------
-    rhot, inside, psin_dense, Rg, Zg = map_grid_to_rhot(
-        R, Z, eq, tind_eq, time_jet
-    )
+    rhot, inside, psin_dense = eqs.rhot_on_grid(R, Z)
+    Rb, Zb = eqs.lcfs()
     n_inside = int(np.count_nonzero(inside))
     print(f'  Grid points inside LCFS: {n_inside} / {inside.size} '
           f'({100.0 * n_inside / inside.size:.1f} %)')
@@ -679,13 +796,6 @@ def main(argv=None):
     # ------- Equivalent rho_bnd ----------------------------------------
     # Match Rate_tor (the toroidally-integrated LOS-region rate) against the
     # TRANSP cumulative flux-surface integral cumsum(THNTX*DVOL).
-    tr.add_data('DVOL')
-    unit_dv = tr.units('DVOL') or ''
-    dvol_to_m3 = 1.0e-6 if 'CM' in unit_dv.upper() else 1.0
-
-    dvol_all = tr.profile('DVOL')
-    dvol_x = dvol_all[trind] if dvol_all.ndim == 2 else dvol_all
-
     order = np.argsort(x_rhot)
     xs_sorted = np.asarray(x_rhot)[order]
     thntx_sorted = np.asarray(thntx_x)[order]
@@ -785,11 +895,12 @@ def main(argv=None):
           f'(consistency check)')
 
     if args.save:
-        outdir = os.path.join(SRC_DIR, 'tmp')
+        import os
+        outdir = os.path.join(str(run_dir), 'tmp')
         os.makedirs(outdir, exist_ok=True)
         out_path = os.path.join(
             outdir,
-            f'{args.pulse}_{args.runid}_KM14_LOS_profile_t{time_jet:.3f}s.txt',
+            f'{run_id}_KM14_LOS_profile_{args.channel}_t{time_jet:.3f}s.txt',
         )
         data = np.column_stack([
             xs_sorted,
@@ -801,9 +912,9 @@ def main(argv=None):
         np.savetxt(
             out_path, data,
             header=(f'pulse {args.pulse}  TRANSP {args.runid}  '
+                    f'channel {args.channel} ({th_var})  '
                     f't_JET = {time_jet:.3f} s\n'
-                    f'eq = {args.dda}/{args.uid}/{args.seq}  '
-                    f't_EQ = {eq.t[tind_eq]:.3f} s\n'
+                    f'equilibrium: {eqs.label}  t_EQ = {eqs.t_eq_jet:.3f} s\n'
                     f'LOS R in [{R[0]:.3f}, {R[-1]:.3f}] m  '
                     f'(w_tor = {args.wtor:.3f} m)\n'
                     f'Rate_LOS = {rate:.4e} n/s   '
@@ -817,8 +928,9 @@ def main(argv=None):
 
     if args.plot:
         diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
-                         inner_R, eq, tind_eq, args.pulse, args.runid,
-                         time_jet, Rmag, Zmag,
+                         inner_R, Rb, Zb, eqs.native_rhot(),
+                         args.pulse, args.runid, time_jet, eqs.t_eq_jet,
+                         eqs.label, chan_label, Rmag, Zmag,
                          rho_bnd=rho_bnd,
                          xs=xs_sorted,
                          thntx_si_prof=thntx_si_profile,
