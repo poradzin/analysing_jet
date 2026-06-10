@@ -904,11 +904,17 @@ def main(argv=None):
 
     if args.save:
         import os
-        outdir = os.path.join(str(run_dir), 'tmp')
+        # Repo-local tmp/ (src/tmp), independent of where the CDFs live, so the
+        # output is easy to find regardless of --data-dir / the data tree.
+        src_dir = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
+        outdir = os.path.join(src_dir, 'tmp')
         os.makedirs(outdir, exist_ok=True)
+        # Tag the eq source so cdf and ppf runs don't overwrite each other.
         out_path = os.path.join(
             outdir,
-            f'{run_id}_KM14_LOS_profile_{args.channel}_t{time_jet:.3f}s.txt',
+            f'{run_id}_KM14_LOS_profile_{args.channel}_{args.eq_source}'
+            f'_t{time_jet:.3f}s.txt',
         )
         data = np.column_stack([
             xs_sorted,

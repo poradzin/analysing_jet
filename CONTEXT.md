@@ -178,6 +178,50 @@ TH whole-plasma 3.9877e17 n/s — because both use the same TRANSP `PSIRZ`
 equilibrium (the earlier ~1% residual was the PPF-vs-CDF equilibrium
 difference, now eliminated when CDF mode is used on both). `rho_bnd ≈ 0.307`.
 
+## Post-rewrite fixes (2026-06-10, all verified locally on M30)
+
+* **`cs.collections` removed in matplotlib ≥3.8.** `diagnostic_plots` used
+  `cs.collections[0].set_label(...)` to legend-label the magenta `rho_bnd`
+  contour; that attribute is gone on the p312 venv (newer mpl than freia).
+  Replaced with an empty proxy line: `ax3.plot([], [], color='magenta', lw=1.4,
+  label=rho_bnd_lbl)`. (Grepped all of `src/` — this was the only `.collections`
+  use.)
+* **Lazy-import path bug.** The original added `src/` to `sys.path`
+  (`SRC_DIR = ../..`) at module top so `import profiles` resolved; making the
+  imports lazy dropped that. `import profiles`/`change_rho` live in `src/`, not
+  in `km14/`, so `--eq-source ppf` would `ModuleNotFoundError: profiles`. Fixed
+  by inserting `src/` into `sys.path` **inside `EqPPF.__init__`** right before
+  the lazy import (CDF path never touches it). Verified the error now falls
+  through to `ModuleNotFoundError: ppf` (expected off-Heimdall — `profiles.py`
+  does `import ppf` at its top).
+* **`--save` location.** The rewrite wrote to `<run_dir>/tmp/`, i.e. the TRANSP
+  data tree (for M29 that's `/common/transp_shared/.../104614/M29/tmp/`), so the
+  user couldn't find it. Restored to the **repo-local `src/tmp/`** (original
+  behavior) and **tagged the filename with the eq source** so cdf and ppf runs
+  don't overwrite each other:
+  `src/tmp/<run_id>_KM14_LOS_profile_<channel>_<cdf|ppf>_t<time>s.txt`.
+  The "Saved LOS profile to ..." line prints the absolute path. Columns:
+  `rhot, THNTX, THKM14, f, DVOL`; header records the equilibrium label + t_EQ.
+
+## OPEN — Friday 2026-06-12 start here
+
+User reports **the ppf and cdf equilibrium versions give different output** on
+104614 **M29** at t_JET=53.5268 s and wants it analysed. Some difference is
+expected (cdf = TRANSP internal `PSIRZ`; ppf = measured EFTP via `profiles.Eq`
+— different reconstructions, so `rhot(R,Z)`, the LCFS shape, `rho_bnd`, and the
+A/B/C split differ, typically closest in the core and diverging toward the
+edge). **Plan:** user generates both files on freia —
+```bash
+python src/neutron/km14/los_thermal_rate.py 104614 M29 -t 53.5268 --save
+python src/neutron/km14/los_thermal_rate.py 104614 M29 -t 53.5268 --eq-source ppf \
+       --dda eftp --uid gszepesi --seq 405 --save
+```
+→ `src/tmp/104614M29_KM14_LOS_profile_total_{cdf,ppf}_t53.527s.txt` — then we
+quantify where/how much they diverge and whether it's purely the equilibrium
+choice or something in the psi→rhot mapping (e.g. CDF `PLFLX`-vs-`XB` inversion
+vs ppf `change_rho.psin_to_sqrt_ftor_norm` ftor-based mapping). NB: M29 is
+pure-DD so `--channel total ≡ dd`. Only **M30** is local; M29 needs freia/heimdall.
+
 ## Geometry
 
 The KM14 LOS is a vertical chord above the JET vessel:
