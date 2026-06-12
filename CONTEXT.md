@@ -203,24 +203,38 @@ difference, now eliminated when CDF mode is used on both). `rho_bnd ≈ 0.307`.
   The "Saved LOS profile to ..." line prints the absolute path. Columns:
   `rhot, THNTX, THKM14, f, DVOL`; header records the equilibrium label + t_EQ.
 
-## OPEN — Friday 2026-06-12 start here
+## RESOLVED 2026-06-12 — CDF on-axis `THKM14`/`f` floor (and ppf-vs-cdf diff)
 
-User reports **the ppf and cdf equilibrium versions give different output** on
-104614 **M29** at t_JET=53.5268 s and wants it analysed. Some difference is
-expected (cdf = TRANSP internal `PSIRZ`; ppf = measured EFTP via `profiles.Eq`
-— different reconstructions, so `rhot(R,Z)`, the LCFS shape, `rho_bnd`, and the
-A/B/C split differ, typically closest in the core and diverging toward the
-edge). **Plan:** user generates both files on freia —
-```bash
-python src/neutron/km14/los_thermal_rate.py 104614 M29 -t 53.5268 --save
-python src/neutron/km14/los_thermal_rate.py 104614 M29 -t 53.5268 --eq-source ppf \
-       --dda eftp --uid gszepesi --seq 405 --save
-```
-→ `src/tmp/104614M29_KM14_LOS_profile_total_{cdf,ppf}_t53.527s.txt` — then we
-quantify where/how much they diverge and whether it's purely the equilibrium
-choice or something in the psi→rhot mapping (e.g. CDF `PLFLX`-vs-`XB` inversion
-vs ppf `change_rho.psin_to_sqrt_ftor_norm` ftor-based mapping). NB: M29 is
-pure-DD so `--channel total ≡ dd`. Only **M30** is local; M29 needs freia/heimdall.
+User reported `THKM14 = f = 0` **on axis** in `--eq-source cdf` on 104614 M29
+(zeros for the innermost ~5 rhot bins), while `--eq-source ppf` correctly gave
+`f ≈ 1` there. **Root cause — a near-axis sampling artifact, two compounding
+effects:**
+
+1. **Bilinear ψn floor (CDF-specific).** `EqCDF` mapped (R,Z)→rhot by *bilinear*
+   interpolation of the coarse `PSIRZ` grid (ΔR ≈ 2 cm). ψ is paraboloidal with
+   its vertex *between* nodes, so bilinear can't reach ψn = 0 — even at the exact
+   axis it floors at ψn ≈ 3e-4, chord min ≈ 7e-4. Since rhot ∝ √ψn near axis,
+   that's a rhot floor of ~0.02, so the innermost shells get no LOS volume → `f=0`.
+   The ppf path avoided it because `EqPPF.rhot_on_grid` injects the axis at ψn=0
+   into a scattered `griddata` interp.
+2. **Coarse chord Z-sampling** (nZ=100 over the ~4 m box → ΔZ ≈ 4 cm), so the
+   nearest sample is ~2 cm from the axis even with a perfect ψ.
+
+**Fix (verified on M30; rho_bnd/Rate unchanged to <0.1%):**
+* `EqCDF.rhot_on_grid` now uses **griddata + pinned axis**, identical to `EqPPF`
+  (one method for both sources); removed the now-orphaned bilinear `_psin_on`.
+* `main()` **inserts (Rmag, Zmag) into the R, Z sampling arrays** (source-agnostic).
+* The centremost bin reaches `f ≈ 0.6` (not a clean 1.0) — the innermost flux
+  shell is smaller than one (R,Z) cell, a hard discretisation limit; ppf's "1.0"
+  there is over-splat clamping. A residual ~25% dip in `f` over rhot 0.012–0.022
+  in CDF mode is a cubic-griddata overshoot on the coarse TRANSP grid (not from
+  the axis insertion; `linear` griddata is far worse on axis) — negligible for
+  the integral, left as-is. **Same fix later applied to `los_th_bt_ratio.py`**
+  via `CdfEquilibrium.rhot_pinned` + axis insertion (see that section).
+
+ppf-vs-cdf bulk diff is otherwise just the equilibrium reconstruction (cdf =
+TRANSP `PSIRZ`; ppf = measured EFTP): M29 `rho_bnd` cdf 0.3070 vs ppf 0.3085
+(~0.5%). M29 is now local at `~/jet/data/104614/M29` (`.CDF` + `_fi`/`_neut` 1–3).
 
 ## Geometry
 
@@ -890,7 +904,12 @@ a bug.
 
 * **Equilibrium** `CdfEquilibrium`: psi(R,Z) from `PSIRZ` (C-order (Z,R)),
   normalized by `PSI0_TR`/`PLFLXA`; rhot(psi_n) inverted from `PLFLX` vs
-  `XB`. Bilinear (R,Z)→rhot. LCFS polygon from `_fi` `RSURF/ZSURF[-1]`.
+  `XB`. Magnetic axis from `RAXIS`/`YAXIS`. LCFS polygon from `_fi`
+  `RSURF/ZSURF[-1]`. The chord grid uses **`rhot_pinned`** (cubic `griddata`
+  of ψn with the axis pinned at ψn=0) + **axis insertion into the R,Z arrays**,
+  not plain bilinear `rhot`, so `f(rhot)` reaches ~1 on axis (the 2026-06-12
+  CDF axis-floor fix; identical recipe to `los_thermal_rate.EqCDF`). Plain
+  bilinear `rhot` is kept for ad-hoc point lookups. Ratios change <0.1%.
 * **Thermal** eps_TH(rhot): the flux-function `THNTX[_DD|_DT]` profile
   selected by `--channel` (see below).
 * **Beam-target** eps_BT(rhot): per-zone `BTN4`/`BTN1`/`BTN5`/`BTN7`
@@ -905,6 +924,29 @@ a bug.
   0D whole-plasma ratio, BT whole-plasma vs `sum(BTN·BMVOL)` and the
   matching `BTNTS_*` scalars (sum + per-component breakdown when the
   channel spans more than one BT key).
+
+## TH/BT weight function vs rhot (commit 3c, 2026-06-12)
+
+`rhot_weight_profiles()` adds the rhot-resolved weight function / TH-BT
+breakdown, mirroring `los_thermal_rate.py`. The LOS weight **`f(rhot)` is
+purely geometric** — the fraction of each TRANSP flux shell's toroidal volume
+inside the chord R-band — so it is **identical for TH and BT** (flux mode); it
+reuses `los_thermal_rate.los_shell_fraction` (lazy import; the two modules
+import each other, so the import is inside the function to avoid a cycle).
+Everything is put on the TRANSP `X` grid; the BT flux profile (always the
+BMVOL flux-average, even under `--bt-mode zone`, since the weight function is a
+flux-surface quantity) is PCHIP-interpolated onto it via `_interp_flux_to`.
+
+Quantities (also written to `src/tmp/<run_id>_KM14_LOS_THBT_weight_idx<idx>_t<t>s.txt`
+on `--save`): `f(rhot)`; LOS-weighted `THKM14 = TH·f`, `BTKM14 = BT·f`;
+per-shell LOS rate `TH·f·DVOL`, `BT·f·DVOL` [n/s]; **local ratio**
+`TH(x)/BT(x)` (f and DVOL cancel); **cumulative ratio**
+`cumΣ(TH·f·DVOL)/cumΣ(BT·f·DVOL)` whose **rhot=1 endpoint closes to
+`(TH/BT)_LOS`** (verified ~0.1%: M30 idx1 total 0.5060 vs 0.5056; dd 0.3528 vs
+0.3529 — per-shell sums match the (R,Z) toroidal integrals to ~0.7%, i.e. no
+BT normalization gap). Kept in the **TH/BT** convention (BT/TH = inverse). In
+`--bt-mode zone` the endpoint uses flux-averaged BT, so it differs from the
+asymmetric zone `(TH/BT)_LOS` by the ~3% poloidal asymmetry (the report says so).
 
 ## Channels (updated 2026-06-09)
 
@@ -928,13 +970,17 @@ python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 1 --channel dd # DD-
 python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --bt-mode zone
 ```
 Flags: `--idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot`.
-Plot (1×4): eps_TH(R,Z), eps_BT(R,Z), local TH/BT, R-integrated vs Z.
+Plot (2×4): top row eps_TH(R,Z), eps_BT(R,Z), local TH/BT, R-integrated vs Z;
+bottom row (commit 3c) `f(rhot)`, per-shell LOS rate `eps·f·DVOL`, local
+`TH/BT(rhot)`, cumulative `TH/BT(rhot)` (→ `(TH/BT)_LOS` at rhot=1).
+`--save <png>` also writes the weight-profile `.txt` to `src/tmp/`.
 
 ## Open / next
 
 * **Run on the M29 pure-DD case** (the actual KM14 thermal-analysis run,
-  pulse 104614 M29) and **compare against the measured KM14 TH/BT.** Needs
-  the M29 `_fi`/`_neut` CDFs (only M30 is in `~/jet/data` locally).
+  pulse 104614 M29) and **compare against the measured KM14 TH/BT.** M29 is
+  now **local** at `~/jet/data/104614/M29` (`.CDF` + `_fi`/`_neut` idx 1–3),
+  so `python los_th_bt_ratio.py 104614 M29 --idx 1 --plot` runs in the dev env.
 * Decide whether to fold the commit-3 angular factor g (≈1.00 for KM14) in
   explicitly — currently omitted as <0.5%.
 * Optional: detector response (energy window/scattering) — same open

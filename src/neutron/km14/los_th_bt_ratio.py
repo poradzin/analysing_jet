@@ -97,6 +97,8 @@ class CdfEquilibrium:
             psibnd = float(d["PLFLXA"][ti])
             XB = np.array(d["XB"][ti])                       # rhot boundaries
             PLFLX = np.array(d["PLFLX"][ti])                 # poloidal flux on XB
+            self.Rmag = float(d["RAXIS"][ti]) / 100.0        # magnetic axis [m]
+            self.Zmag = float(d["YAXIS"][ti]) / 100.0
         self.psin = (psi - psi0) / (psibnd - psi0)           # normalized psi(R,Z)
         # rhot(psi_n): psi_n on the XB grid is monotonic 0->1; XB is rhot
         psin_b = (PLFLX - PLFLX[0]) / (PLFLX[-1] - PLFLX[0])
@@ -104,7 +106,12 @@ class CdfEquilibrium:
         self._rhot_b = XB
 
     def rhot(self, R, Z):
-        """Bilinear psi_n at (R, Z) [m] -> rhot (sqrt tor flux). Clipped [0,1]."""
+        """Bilinear psi_n at (R, Z) [m] -> rhot (sqrt tor flux). Clipped [0,1].
+
+        NB: bilinear floors psi_n at the coarse PSIRZ axis node (~3e-4 -> rhot
+        ~0.02), which zeroes the innermost LOS flux shells. Use ``rhot_pinned``
+        for the chord grid; this plain version is kept for ad-hoc point lookups.
+        """
         RG, ZG = self.RG, self.ZG
         ir = np.clip(np.searchsorted(RG, R) - 1, 0, len(RG) - 2)
         iz = np.clip(np.searchsorted(ZG, Z) - 1, 0, len(ZG) - 2)
@@ -115,6 +122,29 @@ class CdfEquilibrium:
               + P[iz + 1, ir] * (1 - tr) * tz + P[iz + 1, ir + 1] * tr * tz)
         pn = np.clip(pn, 0.0, 1.0)
         return np.clip(np.interp(pn, self._psin_b, self._rhot_b), 0.0, 1.0)
+
+    def rhot_pinned(self, R, Z):
+        """rhot at (R, Z) [m] via cubic griddata of psi_n with the magnetic axis
+        pinned at psi_n = 0.
+
+        Bilinear interpolation of the coarse PSIRZ grid (dR ~ 2 cm) cannot reach
+        the true axis minimum (psi is paraboloidal with its vertex between
+        nodes), flooring psi_n at ~3e-4, i.e. rhot ~ 0.02 -- so the innermost
+        f(rhot) bins get no LOS volume. Injecting the axis as a scattered node
+        removes the floor. Mirrors ``los_thermal_rate.EqCDF.rhot_on_grid``.
+        """
+        from scipy.interpolate import griddata
+        Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
+        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag]])
+        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag]])
+        pts_psin = np.concatenate([self.psin.ravel(), [0.0]])
+        query = np.column_stack([np.asarray(R).ravel(), np.asarray(Z).ravel()])
+        pd = griddata((pts_R, pts_Z), pts_psin, query, method="cubic")
+        if np.any(np.isnan(pd)):
+            pl = griddata((pts_R, pts_Z), pts_psin, query, method="linear")
+            pd = np.where(np.isnan(pd), pl, pd)
+        pc = np.clip(np.where(np.isnan(pd), 1.0, pd), 0.0, 1.0)
+        return np.clip(np.interp(pc, self._psin_b, self._rhot_b), 0.0, 1.0)
 
 
 def read_lcfs(fi_path):
@@ -195,6 +225,83 @@ def toroidal_integral(grid_si, R, Z):
 
 
 # ----------------------------------------------------------------------
+# LOS weight function f(rhot) and LOS-weighted TH/BT profiles vs rhot
+# ----------------------------------------------------------------------
+
+def _interp_flux_to(x_src, y_src, x_dst):
+    """PCHIP a flux profile y_src(x_src) onto x_dst, padded to cover [0, 1].
+
+    Same padding convention as ``profile_on_grid``: rhot=0 takes the on-axis
+    value, rhot=1 is forced to zero, and points outside the source support are
+    set to 0 (never negative).
+    """
+    order = np.argsort(x_src)
+    xs = np.asarray(x_src, float)[order]
+    ys = np.asarray(y_src, float)[order]
+    uniq = np.concatenate(([True], np.diff(xs) > 0))
+    xs, ys = xs[uniq], ys[uniq]
+    if xs[0] > 0.0:
+        xs = np.concatenate(([0.0], xs)); ys = np.concatenate(([ys[0]], ys))
+    if xs[-1] < 1.0:
+        xs = np.concatenate((xs, [1.0])); ys = np.concatenate((ys, [0.0]))
+    out = PchipInterpolator(xs, ys, extrapolate=False)(np.asarray(x_dst, float))
+    return np.clip(np.where(np.isnan(out), 0.0, out), 0.0, None)
+
+
+def rhot_weight_profiles(eq, rhot, inside, R, Z, x_th, th_prof, x_bt, bt_prof,
+                         cdf_path):
+    """LOS shell-fraction weight f(rhot) and LOS-weighted TH/BT vs rhot.
+
+    Mirrors ``los_thermal_rate.py``: f(rhot) is the *geometric* fraction of
+    each TRANSP flux shell's toroidal volume that falls inside the chord R-band
+    (computed once, shared by TH and BT). Everything is put on the TRANSP ``X``
+    grid (where THNTX and DVOL live); the BT flux profile is PCHIP-interpolated
+    onto it.
+
+    Returns a dict with, on the sorted ``X`` grid ``xs``:
+      f            geometric LOS shell fraction
+      th_si, bt_si flux-profile emissivities                 [n/m3/s]
+      thkm14,btkm14 LOS-weighted emissivities = eps * f       [n/m3/s]
+      dvol_m3      TRANSP shell volume                        [m3]
+      shell_th, shell_bt  per-shell LOS rate = eps*f*DVOL     [n/s]
+      cum_th, cum_bt      cumulative per-shell LOS rate       [n/s]
+      ratio_local  th_si/bt_si  (= thkm14/btkm14; f, DVOL cancel)
+      ratio_cum    cum_th/cum_bt  (-> (TH/BT)_LOS at rhot=1)
+      sum_th, sum_bt      total per-shell LOS rate (= cum[-1])
+    """
+    from los_thermal_rate import los_shell_fraction  # lazy: avoids import cycle
+    with Dataset(str(cdf_path), "r") as d:
+        dvol = np.array(d["DVOL"][eq.tind]) * 1.0e-6   # CM**3 -> m^3
+
+    order = np.argsort(x_th)
+    xs = np.asarray(x_th, float)[order]
+    dvol_m3 = np.asarray(dvol, float)[order]
+
+    f, _ = los_shell_fraction(rhot, inside, R, Z, xs, dvol_m3, subgrid=True)
+
+    th_si = np.asarray(th_prof, float)[order] * 1.0e6        # n/m3/s
+    bt_si = _interp_flux_to(x_bt, bt_prof, xs) * 1.0e6       # n/m3/s
+
+    thkm14 = th_si * f
+    btkm14 = bt_si * f
+    shell_th = thkm14 * dvol_m3                              # n/s per shell
+    shell_bt = btkm14 * dvol_m3
+    cum_th = np.cumsum(shell_th)
+    cum_bt = np.cumsum(shell_bt)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio_local = np.where(bt_si > 0, th_si / bt_si, np.nan)
+        ratio_cum = np.where(cum_bt > 0, cum_th / cum_bt, np.nan)
+
+    return dict(xs=xs, f=f, th_si=th_si, bt_si=bt_si,
+                thkm14=thkm14, btkm14=btkm14, dvol_m3=dvol_m3,
+                shell_th=shell_th, shell_bt=shell_bt,
+                cum_th=cum_th, cum_bt=cum_bt,
+                ratio_local=ratio_local, ratio_cum=ratio_cum,
+                sum_th=float(cum_th[-1]), sum_bt=float(cum_bt[-1]))
+
+
+# ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
 
@@ -255,11 +362,19 @@ def main(argv=None):
           f"beam-target=BTN[{'+'.join(bt_keys)}]")
     print(f"BT mode : {args.bt_mode}")
 
-    # chord grid
+    # chord grid. Insert the magnetic axis into the R, Z sampling so a chord
+    # sample sits exactly at (Rmag, Zmag) -- needed for the centremost f(rhot)
+    # bin (the innermost flux shell is smaller than one cell). Source-agnostic.
     R = np.linspace(args.Rmin, args.Rmax, args.nR)
     Z = np.linspace(float(eq.ZG.min()), float(eq.ZG.max()), args.nZ)
+    if R[0] <= eq.Rmag <= R[-1]:
+        R = np.unique(np.concatenate([R, [eq.Rmag]]))
+    if Z[0] <= eq.Zmag <= Z[-1]:
+        Z = np.unique(np.concatenate([Z, [eq.Zmag]]))
     Rg, Zg = np.meshgrid(R, Z, indexing="ij")
-    rhot = eq.rhot(Rg.ravel(), Zg.ravel()).reshape(Rg.shape)
+    # rhot_pinned (griddata + pinned axis) instead of plain bilinear eq.rhot,
+    # so f(rhot) reaches ~1 on axis (see rhot_pinned docstring).
+    rhot = eq.rhot_pinned(Rg.ravel(), Zg.ravel()).reshape(Rg.shape)
     inside = MplPath(np.column_stack([Rb, Zb])).contains_points(
         np.column_stack([Rg.ravel(), Zg.ravel()])).reshape(Rg.shape)
     print(f"chord   : R[{R[0]:.2f},{R[-1]:.2f}] x Z[{Z[0]:.2f},{Z[-1]:.2f}] m, "
@@ -268,9 +383,11 @@ def main(argv=None):
     # thermal emissivity on grid (N/CM3/SEC -> n/m3/s)
     th_grid = profile_on_grid(x_th, th_prof, rhot, inside) * 1.0e6
 
-    # beam-target emissivity on grid
+    # beam-target emissivity on grid. The flux-surface average is computed
+    # unconditionally -- it feeds the rhot weight function below (a flux-surface
+    # quantity) even when --bt-mode zone is used for the 2-D maps.
+    x_bt, bt_prof = flux_avg_profile(bt_zone_sum, fi["x2d"], fi["bmvol"])
     if args.bt_mode == "flux":
-        x_bt, bt_prof = flux_avg_profile(bt_zone_sum, fi["x2d"], fi["bmvol"])
         bt_grid = profile_on_grid(x_bt, bt_prof, rhot, inside) * 1.0e6
     else:
         bt_grid = zone_emis_on_grid(bt_zone_sum, fi["r2d"] / 100.0,
@@ -311,14 +428,68 @@ def main(argv=None):
         for k, v in btnts_parts:
             print(f"     BTNTS_{k:<2} = {v:.4e} n/s")
 
+    # ----- LOS weight function f(rhot) and TH/BT vs rhot --------------------
+    wp = rhot_weight_profiles(eq, rhot, inside, R, Z, x_th, th_prof,
+                              x_bt, bt_prof, cdf_path)
+    print("\n----------- LOS weight function & TH/BT vs rhot -----------")
+    print(f"  f(rhot) = LOS shell volume / TRANSP DVOL   (max f = {wp['f'].max():.4f})")
+    print(f"  Sum(TH*f*DVOL) = {wp['sum_th']:.4e} n/s   "
+          f"(th_tor = {th_tor:.4e}, resid {abs(wp['sum_th']-th_tor)/th_tor:.2e})")
+    print(f"  Sum(BT*f*DVOL) = {wp['sum_bt']:.4e} n/s   "
+          f"(bt_tor = {bt_tor:.4e}, resid {abs(wp['sum_bt']-bt_tor)/bt_tor:.2e})")
+    if args.bt_mode == "flux":
+        print(f"  cumulative (TH/BT)(rhot=1) = {wp['ratio_cum'][-1]:.4f}   "
+              f"(should match (TH/BT)_LOS = {th_los / bt_los:.4f})")
+    else:
+        # The rhot weight function always uses the flux-averaged BT, so its
+        # endpoint matches the flux-mode LOS ratio, not the asymmetric zone one.
+        print(f"  cumulative (TH/BT)(rhot=1) = {wp['ratio_cum'][-1]:.4f}   "
+              f"(flux-averaged BT; differs from zone (TH/BT)_LOS "
+              f"= {th_los / bt_los:.4f} by the poloidal asymmetry)")
+
+    if args.save:
+        _save_weight_profile(wp, run_id, idx, chan_label, th_var, bt_keys,
+                             fi["time"], th_los / bt_los)
+
     if (args.plot or args.save) and not args.no_plot:
         make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
-                  Rb, Zb, run_id, idx, chan_label, th_los, bt_los, save=args.save)
+                  Rb, Zb, run_id, idx, chan_label, th_los, bt_los, wp,
+                  save=args.save)
     return 0
 
 
+def _save_weight_profile(wp, run_id, idx, chan_label, th_var, bt_keys,
+                         time_s, th_bt_los):
+    """Write the rhot weight-function / TH-BT profile to src/tmp/ as text."""
+    import os
+    src_dir = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "../.."))
+    outdir = os.path.join(src_dir, "tmp")
+    os.makedirs(outdir, exist_ok=True)
+    out_path = os.path.join(
+        outdir, f"{run_id}_KM14_LOS_THBT_weight_idx{idx}_t{time_s:.3f}s.txt")
+    data = np.column_stack([
+        wp["xs"], wp["f"], wp["th_si"], wp["bt_si"],
+        wp["thkm14"], wp["btkm14"], wp["dvol_m3"],
+        wp["shell_th"], wp["shell_bt"], wp["ratio_local"], wp["ratio_cum"],
+    ])
+    np.savetxt(
+        out_path, data,
+        header=(f"{run_id}  idx {idx}  channel {chan_label}  "
+                f"TH={th_var}  BT=BTN[{'+'.join(bt_keys)}]  t = {time_s:.3f} s\n"
+                f"(TH/BT)_LOS = {th_bt_los:.6f}  "
+                f"[cum (TH/BT)(rhot=1) must match this]\n"
+                f"  rhot          f             TH[n/m3/s]    BT[n/m3/s]    "
+                f"THKM14        BTKM14        DVOL[m3]      "
+                f"TH*f*DVOL[n/s] BT*f*DVOL[n/s] TH/BT_local   TH/BT_cum"),
+        fmt="%.8e",
+    )
+    print(f"  saved weight profile -> {out_path}")
+    return out_path
+
+
 def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
-              Rb, Zb, run_id, idx, chan_label, th_los, bt_los, save=None):
+              Rb, Zb, run_id, idx, chan_label, th_los, bt_los, wp, save=None):
     import matplotlib
     if save is not None:
         matplotlib.use("Agg")
@@ -326,21 +497,59 @@ def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
     Rg, Zg = np.meshgrid(R, Z, indexing="ij")
     ratio_grid = np.divide(th_grid, bt_grid, out=np.full_like(th_grid, np.nan),
                            where=bt_grid > 0)
-    fig, ax = plt.subplots(1, 4, figsize=(20, 6))
+    fig, ax = plt.subplots(2, 4, figsize=(20, 11))
+    # ---- top row: (R, Z) emissivity maps + R-integrated vs Z ----
     for a, grid, ttl, cmap in [
-            (ax[0], np.where(inside, th_grid, np.nan), "eps_TH [n/m3/s]", "inferno"),
-            (ax[1], np.where(inside, bt_grid, np.nan), "eps_BT [n/m3/s]", "inferno"),
-            (ax[2], ratio_grid, "TH/BT (local)", "coolwarm")]:
+            (ax[0, 0], np.where(inside, th_grid, np.nan), "eps_TH [n/m3/s]", "inferno"),
+            (ax[0, 1], np.where(inside, bt_grid, np.nan), "eps_BT [n/m3/s]", "inferno"),
+            (ax[0, 2], ratio_grid, "TH/BT (local)", "coolwarm")]:
         pc = a.pcolormesh(Rg, Zg, grid, shading="auto", cmap=cmap)
         a.plot(Rb, Zb, "c-", lw=1)
         fig.colorbar(pc, ax=a)
         a.set_aspect("equal"); a.set_xlabel("R [m]"); a.set_ylabel("Z [m]")
         a.set_title(ttl)
-    ax[3].plot(th_innerZ, Z, "r-", label="TH")
-    ax[3].plot(bt_innerZ, Z, "b-", label="BT")
-    ax[3].set_xlabel(r"$\int \epsilon\, dR$ [n/m2/s]"); ax[3].set_ylabel("Z [m]")
-    ax[3].set_title(f"R-integrated vs Z\n(TH/BT)_LOS={th_los/bt_los:.3f}")
-    ax[3].legend(); ax[3].grid(True, ls=":")
+    ax[0, 3].plot(th_innerZ, Z, "r-", label="TH")
+    ax[0, 3].plot(bt_innerZ, Z, "b-", label="BT")
+    ax[0, 3].set_xlabel(r"$\int \epsilon\, dR$ [n/m2/s]"); ax[0, 3].set_ylabel("Z [m]")
+    ax[0, 3].set_title(f"R-integrated vs Z\n(TH/BT)_LOS={th_los/bt_los:.3f}")
+    ax[0, 3].legend(); ax[0, 3].grid(True, ls=":")
+
+    # ---- bottom row: LOS weight function & TH/BT vs rhot ----
+    xs = wp["xs"]
+    a = ax[1, 0]                                   # geometric LOS weight f(rhot)
+    a.plot(xs, wp["f"], "g-", lw=1.4)
+    a.fill_between(xs, 0.0, wp["f"], color="g", alpha=0.15)
+    a.set_xlim(0, 1); a.set_ylim(0, 1.05); a.grid(True, ls=":")
+    a.set_xlabel("rhot"); a.set_ylabel(r"$f(\rho_t)$")
+    a.set_title("LOS weight function (geometric)")
+
+    a = ax[1, 1]                                   # per-shell LOS rate eps*f*DVOL
+    a.plot(xs, wp["shell_th"], "r-", lw=1.4, label=r"TH$\cdot f\cdot$DVOL")
+    a.plot(xs, wp["shell_bt"], "b-", lw=1.4, label=r"BT$\cdot f\cdot$DVOL")
+    a.set_xlim(0, 1); a.grid(True, ls=":")
+    a.set_xlabel("rhot"); a.set_ylabel("per-shell LOS rate [n/s]")
+    a.set_title("LOS contribution per flux shell")
+    a.legend(fontsize=8)
+
+    a = ax[1, 2]                                   # local TH/BT(rhot)
+    a.plot(xs, wp["ratio_local"], "m-", lw=1.4)
+    a.axhline(th_los / bt_los, color="k", ls="--", lw=0.9,
+              label=f"(TH/BT)_LOS={th_los/bt_los:.3f}")
+    a.set_xlim(0, 1); a.grid(True, ls=":")
+    a.set_xlabel("rhot"); a.set_ylabel("TH/BT (local)")
+    a.set_title(r"Local ratio  TH$(\rho_t)$/BT$(\rho_t)$")
+    a.legend(fontsize=8)
+
+    a = ax[1, 3]                                   # cumulative TH/BT(rhot)
+    a.plot(xs, wp["ratio_cum"], "c-", lw=1.6)
+    a.axhline(th_los / bt_los, color="k", ls="--", lw=0.9,
+              label=f"(TH/BT)_LOS={th_los/bt_los:.3f}")
+    a.set_xlim(0, 1); a.grid(True, ls=":")
+    a.set_xlabel("rhot")
+    a.set_ylabel(r"$\sum$TH$f$DVOL / $\sum$BT$f$DVOL")
+    a.set_title(f"Cumulative TH/BT  (rhot=1: {wp['ratio_cum'][-1]:.3f})")
+    a.legend(fontsize=8)
+
     fig.suptitle(f"{run_id} idx{idx}  KM14 LOS TH/BT  {chan_label}")
     fig.tight_layout()
     if save:
