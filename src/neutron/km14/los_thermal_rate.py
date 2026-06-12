@@ -249,24 +249,37 @@ class EqCDF:
     def lcfs(self):
         return self._Rb, self._Zb
 
-    def _psin_on(self, R, Z):
-        """Bilinear (unclipped) normalized psi at (R, Z) [m] -- for contours."""
-        RG, ZG = self.RG, self.ZG
-        ir = np.clip(np.searchsorted(RG, R) - 1, 0, len(RG) - 2)
-        iz = np.clip(np.searchsorted(ZG, Z) - 1, 0, len(ZG) - 2)
-        tr = (R - RG[ir]) / (RG[ir + 1] - RG[ir])
-        tz = (Z - ZG[iz]) / (ZG[iz + 1] - ZG[iz])
-        P = self.ceq.psin
-        return (P[iz, ir] * (1 - tr) * (1 - tz) + P[iz, ir + 1] * tr * (1 - tz)
-                + P[iz + 1, ir] * (1 - tr) * tz + P[iz + 1, ir + 1] * tr * tz)
-
     def rhot_on_grid(self, R, Z):
+        # Scattered psi_n(R, Z) from the TRANSP PSIRZ grid, with the magnetic
+        # axis pinned at psi_n = 0. Plain bilinear interpolation of the coarse
+        # PSIRZ grid (dR ~ 2 cm) cannot recover the true axis minimum -- psi is
+        # paraboloidal with its vertex between nodes, so bilinear floors psi_n
+        # at ~3e-4, i.e. rhot ~ 0.02. That zeroes the innermost f(rhot) bins
+        # (THKM14 = 0 on axis). Pinning the axis as a scattered node removes the
+        # floor, mirroring EqPPF.rhot_on_grid so both equilibrium sources use
+        # one method.
+        from scipy.interpolate import griddata
+        Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
+        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag]])
+        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag]])
+        pts_psin = np.concatenate([self.ceq.psin.ravel(), [0.0]])
+
         Rg, Zg = np.meshgrid(R, Z, indexing='ij')
-        flatR, flatZ = Rg.ravel(), Zg.ravel()
-        rhot = self.ceq.rhot(flatR, flatZ).reshape(Rg.shape)
-        psin_dense = self._psin_on(flatR, flatZ).reshape(Rg.shape)
+        query = np.column_stack([Rg.ravel(), Zg.ravel()])
+
+        psin_dense = griddata((pts_R, pts_Z), pts_psin, query, method='cubic')
+        if np.any(np.isnan(psin_dense)):
+            psin_lin = griddata((pts_R, pts_Z), pts_psin, query, method='linear')
+            psin_dense = np.where(np.isnan(psin_dense), psin_lin, psin_dense)
+        psin_dense = psin_dense.reshape(Rg.shape)
+
         inside = MplPath(np.column_stack(self.lcfs())).contains_points(
-            np.column_stack([flatR, flatZ])).reshape(Rg.shape)
+            query).reshape(Rg.shape)
+
+        psin_clip = np.clip(np.where(np.isnan(psin_dense), 1.0, psin_dense),
+                            0.0, 1.0)
+        rhot = np.clip(np.interp(psin_clip.ravel(), self.ceq._psin_b,
+                                 self.ceq._rhot_b), 0.0, 1.0).reshape(Rg.shape)
         return rhot, inside, psin_dense
 
     def native_rhot(self):
@@ -770,8 +783,16 @@ def main(argv=None):
     z_bot, z_top = eqs.z_extent()
     R, Z = build_rz_grid(z_bot, z_top, args.Rmin, args.Rmax,
                          args.nR, args.nZ, args.zmargin)
-    print(f'  LOS R in [{R[0]:.3f}, {R[-1]:.3f}] m  ({args.nR} samples)')
-    print(f'  LOS Z in [{Z[0]:.3f}, {Z[-1]:.3f}] m  ({args.nZ} samples) '
+    # Insert the magnetic axis into the sampling arrays so a chord sample sits
+    # exactly at (Rmag, Zmag). Without it the centremost f(rhot) bin is
+    # under-sampled -- the innermost flux shell is smaller than one (R, Z) cell
+    # -- so THKM14 stays ~0 on axis even once psi_n is pinned. Source-agnostic.
+    if R[0] <= Rmag <= R[-1]:
+        R = np.unique(np.concatenate([R, [Rmag]]))
+    if Z[0] <= Zmag <= Z[-1]:
+        Z = np.unique(np.concatenate([Z, [Zmag]]))
+    print(f'  LOS R in [{R[0]:.3f}, {R[-1]:.3f}] m  ({len(R)} samples)')
+    print(f'  LOS Z in [{Z[0]:.3f}, {Z[-1]:.3f}] m  ({len(Z)} samples) '
           f'[box Z extent: {z_bot:.3f} .. {z_top:.3f}]')
     print(f'  LOS centre R_c = {0.5 * (R[0] + R[-1]):.3f} m, '
           f'Rmag - R_c = {Rmag - 0.5 * (R[0] + R[-1]):+.3f} m')
