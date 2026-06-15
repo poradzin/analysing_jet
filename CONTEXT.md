@@ -1046,8 +1046,12 @@ asymmetric zone `(TH/BT)_LOS` by the ~3% poloidal asymmetry (the report says so)
   KM14 spectroscopically separates on DT-campaign pulses.
 * **`--channel dt`** — `THNTX_DT` vs `BTN1` (14 MeV).
 
-For the pure-DD M29 run the three channels collapse: `THNTX ≡ THNTX_DD`,
-no DT components in `_neut`.
+NB (corrected 2026-06-15): **104614 M29 is a DT run**, not pure DD — the local
+`~/jet/data/104614/M29` files have `THNTX_DT` (~140× `THNTX_DD`), thermal `NT`,
+`BTNTS_DT`, and `BTN1`+`BTN4` in `_neut`. The KM14 diamond detector measures the
+14 MeV DT line (E_dep = E_n − 5.7 MeV via ¹²C(n,α₀), peak 8.4 MeV), so the
+**`dt` channel is the physical one for KM14 on this pulse** (earlier "M29 pure DD"
+notes were wrong).
 
 ## BT emission anisotropy `--bt-aniso` (added 2026-06-15)
 
@@ -1205,6 +1209,65 @@ python los_th_bt_ratio.py 104614 M29 --channel dd \
        --data-dir /common/transp_shared/Data/result/JET --plot
 ```
 then compare `(TH/BT)_LOS` against the spectroscopically-measured KM14 TH/BT
-for that pulse/time. (M29 is pure DD, so `--channel dd` is the physical
-choice and DT is absent.) If a TH/BT time trace is wanted, loop over the
+for that pulse/time. If a TH/BT time trace is wanted, loop over the
 available `--idx` FBM windows.
+
+---
+
+# `km14_spectrum.py` — KM14 diamond neutron-spectrum forward model (added 2026-06-15)
+
+`src/neutron/km14/km14_spectrum.py` forward-models the **KM14 diamond detector
+neutron energy spectrum** (thermal-DT + beam-thermal-DT) along the KM14 LOS and
+overlays it on the measured #104614 spectrum, to compare against the
+Nocente–Rigamonti diamond analysis (`~/jet/data/104614/figs/`).
+
+## What KM14 actually is (corrected 2026-06-15)
+KM14 is a **single-crystal diamond detector** measuring **14 MeV DT neutrons**.
+Its energy axis is *deposited* energy `E_dep` via `¹²C(n,α₀)⁹Be` (Q≈−5.7 MeV),
+so the 14.03 MeV DT line lands at `E_dep ≈ 8.4 MeV` (measured span 7.2–9.3 MeV).
+**104614 M29 is a DT run** (`THNTX_DT` ~140× `THNTX_DD`, thermal `NT`, `BTN1`),
+not pure DD — earlier notes were wrong. Use the **DT** channel for KM14.
+
+## Method
+* **LOS weight** `f(rhot)` on the TRANSP X grid via the shared
+  `los_thermal_rate.los_shell_fraction` (same chord geometry as
+  `los_th_bt_ratio.py`; reuses `ltb.CdfEquilibrium`/`read_lcfs`/`rhot_pinned`).
+* **Thermal DT**: per flux shell a Gaussian line at `E0=14.03 MeV`,
+  `FWHM=177·√(Ti[keV])` keV (DT Brysk Doppler width), weighted by
+  `THNTX_DT·f·DVOL`. Integral = TH LOS rate.
+* **Beam-thermal DT**: per NUBEAM zone, MC-sample fast-D (speed/pitch/gyrophase
+  via `BField` B̂) + thermal-T Maxwellian (+rotation), weight `σ·v_rel`, emit
+  isotropic-CM → lab velocity (`bt_kinematics`), keep neutrons into the KM14
+  detector cone (per-zone `n̂` to the detector point), histogram lab energy; each
+  zone scaled by `BTN1·f(rhot_zone)·BMVOL`. Reuses `bt_los_emissivity`.
+* **Detector response**: `E_dep = E_n + shift` (shift set by `--edep-peak`,
+  default aligns the TH peak to 8.40 MeV → −5.63 MeV) then Gaussian convolution
+  with `--det-fwhm` (default 0.20 MeV).
+* **Normalization**: scale the **total** (TH+BT) so its peak matches the data
+  (`--peak-counts`, default 145); the **TH:BT split is fixed by the LOS rates**
+  (the physics under test), so only one global amplitude is free.
+* **Overlay**: the experimental PNG is shown as a calibrated background
+  (axis px→data calibration hard-coded in `PNG_CAL`: x-ticks 7.2–9.2 at px
+  129–725, y-spine 0–200 at px 584–32); model TH/B-th/Total drawn on top.
+
+## Result (104614 M29 idx 1, t_TRANSP=12.33 s = JET 53.15–53.5 s)
+`(TH/BT)_LOS = 0.53` (TH fraction 34.7%), TH LOS rate 2.03e17 n/s (matches
+`los_th_bt_ratio --channel dt` `Sum(TH·f·DVOL)` exactly), BT 3.82e17 n/s (0.7%
+vs the flux-profile integral). **The model TH (magenta) lands on the Nocente
+fitted Th component (8.40 MeV, FWHM 0.47); B-th (lime) ≈ their B-th (peak 8.56,
+FWHM 1.15 MeV).** Key physics: the LOS-weighted TH/BT ≈ **53%** sits between the
+Nocente ρ<0.2 proxy (**25–31%**) and the measured **~59%** — i.e. the LOS
+weighting explains most of the discrepancy they attributed to core Ti/n_d. The
+model omits the **Scatt** background (detector/environment, not emission), so the
+total slightly underfits the 7.6–8.0 MeV low-energy shoulder.
+
+## CLI
+```bash
+python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 --save        # overlay PNG into figs/
+python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 --no-plot     # text rates only
+python km14_spectrum.py 104614 M29 --idx 1 --det-fwhm 0.25 --edep-peak 8.40 --nsamp 80000
+```
+Flags: `--idx --data-dir --Rmin --Rmax --nR --nZ --detector-R --detector-height
+--cone-deg --nsamp --fast-norm {bdens,ntot} --no-rotation --seed --e0-dt
+--edep-peak --det-fwhm --de-kev --peak-counts --png --save --no-plot`.
+Output overlay: `figs/<run_id>_KM14_spectrum_overlay_idx<idx>.png`.
