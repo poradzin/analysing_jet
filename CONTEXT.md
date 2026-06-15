@@ -1049,16 +1049,62 @@ asymmetric zone `(TH/BT)_LOS` by the ~3% poloidal asymmetry (the report says so)
 For the pure-DD M29 run the three channels collapse: `THNTX ≡ THNTX_DD`,
 no DT components in `_neut`.
 
+## BT emission anisotropy `--bt-aniso` (added 2026-06-15)
+
+Optional finite-height-detector treatment of the beam-target **emission
+direction**, broadening the script beyond the 4π-isotropic default. KM14 is a
+point detector ~10 m above `Zmag` on the chord axis, so BT neutrons reach it
+within a **narrow upward cone** whose axis tilts a few degrees off vertical
+across the chord (per emission point). Each NUBEAM zone's `BTN*` rate is
+weighted by the directional factor `g(zone) = (dε/dΩ toward the detector) /
+(ε/4π)`, computed by reusing `bt_los_emissivity` (`BField` + per-zone MC of the
+fast-ion dist + CM→lab boost). **Only the dimensionless `g` is taken from the
+MC**; the 4π magnitude stays NUBEAM's validated `BTN*`. In the TH/BT ratio the
+common detector solid angle cancels, so the exact net effect is
+`(TH/BT)_LOS → (TH/BT)_LOS / ⟨g⟩_BT`.
+
+* **Geometry.** Per-zone LOS `n̂ = (R_det−R, 0, Z_det−Z)` (zero toroidal
+  component, since detector and chord share a toroidal plane). Detector at
+  `--detector-R` (default chord centre 2.90 m), `--detector-height` above Zmag
+  (default 10 m). `zone_emissivity` in `bt_los_emissivity.py` was generalized to
+  accept a per-zone `(n_zone,3)` `n_los` (back-compatible with the single `(3,)`
+  vector its own `main` passes — selftest + M29 run unchanged).
+* **Implementation.** `bt_anisotropy_factors()` builds `g_map[key]` per BT
+  component (DD→`DD_n`, DT→`DT`; keys without a Bosch–Hale σ such as TT get
+  `g=1`); `main` forms `bt_zone_eff = Σ_k BTN_k·g_k` and runs it through the
+  *existing* flux/zone grid + chord machinery, so flux-/zone-mode, the `f(rhot)`
+  weight function and the cumulative-ratio closure all carry through unchanged.
+  The 0D whole-plasma cross-check keeps the isotropic `bt_zone_sum`.
+* **Result (matches the commit-3 prediction g≈1.00).** The ~5° poloidal tilt
+  stays ⟂ to the toroidal B̂, so the correction is negligible:
+  - 104614 **M29 idx 1 dd**: `(TH/BT)_LOS` 0.3744→0.3742, `⟨g⟩_BT=1.0008`
+    (−0.08%); reactivity-wtd `g_DD=1.0013` (≈ the fixed-+z 1.001 from
+    `bt_los_emissivity`, confirming the finite-height tilt is immaterial).
+  - 104614 **M30 idx 1 total**: 0.5056→0.5059, `g_DD=1.0016`, `g_DT=0.9981`,
+    `⟨g⟩_BT=0.9995` (+0.05%, DT-weighted).
+  Reporting prints both ratios, `⟨g⟩_BT`, the % shift, per-component `g` and the
+  `vector Eps_4pi/NUBEAM` consistency (≈0.98–0.99). `--save` tags the weight
+  `.txt` and plot label with `_aniso`/`[BT aniso]` so they don't overwrite the
+  isotropic run. New flags: `--bt-aniso --detector-R --detector-height
+  --cone-deg --nsamp --fast-norm {bdens,ntot} --no-rotation --seed`.
+
 ## CLI
 ```bash
 python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 2 --plot       # total (default)
 python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 1 --channel dd # DD-only
 python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --bt-mode zone
+python src/neutron/km14/los_th_bt_ratio.py 104614 M29 --idx 1 --channel dd --bt-aniso  # finite-height BT view
 ```
-Flags: `--idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot`.
+Flags: `--idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot`
+plus (anisotropy) `--bt-aniso --detector-R --detector-height --cone-deg --nsamp --fast-norm {bdens,ntot} --no-rotation --seed`.
 Plot (2×4): top row eps_TH(R,Z), eps_BT(R,Z), local TH/BT, R-integrated vs Z;
 bottom row (commit 3c) `f(rhot)`, per-shell LOS rate `eps·f·DVOL`, local
-`TH/BT(rhot)`, cumulative `TH/BT(rhot)` (→ `(TH/BT)_LOS` at rhot=1).
+`TH/BT(rhot)`, cumulative `TH/BT(rhot)`. The cumulative panel overlays the
+LOS-weighted curve (cyan, → `(TH/BT)_LOS` at rhot=1) and a dashed TRANSP
+full-plasma reference `cumΣ(TH·DVOL)/cumΣ(BT·DVOL)` (no `f`, → whole-plasma 0D
+ratio at rhot=1) so the LOS-narrowing reweighting is read off directly.
+The local-TH/BT (R,Z) map masks near-LCFS cells where BT→0 and clips the colour
+scale to the 2–98th percentile (else edge spikes wash it to one flat colour).
 `--save <png>` also writes the weight-profile `.txt` to `src/tmp/`.
 
 ## Open / next

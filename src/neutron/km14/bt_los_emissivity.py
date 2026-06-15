@@ -158,9 +158,17 @@ def zone_emissivity(fi, n_fast, n_th, ti, reaction, m_fast_amu, m_th_amu,
     sigma*v_rel, and emit an isotropic CM neutron -> lab direction. dEps/dOmega
     along n_los is estimated from the reaction-weight fraction falling in a cone
     of half-angle alpha about n_los.
+
+    ``n_los`` may be a single direction ``(3,)`` (same LOS for every zone, e.g.
+    a perfectly vertical chord) or a per-zone array ``(n_zone, 3)`` (the LOS
+    from each zone to a finite-distance detector -- a narrow cone with a
+    slightly different axis per zone). Both are unit vectors in the (R, phi, Z)
+    basis.
     """
     F = fi["F"]
     n_zone = F.shape[0]
+    n_los = np.asarray(n_los, float)
+    per_zone_los = n_los.ndim == 2          # (n_zone, 3) vs a single (3,)
     eps4pi = np.zeros(n_zone)
     dedom = np.zeros(n_zone)              # dEps/dOmega along n_los
     cone_solid = 2.0 * np.pi * (1.0 - cos_alpha)
@@ -191,7 +199,8 @@ def zone_emissivity(fi, n_fast, n_th, ti, reaction, m_fast_amu, m_th_amu,
         cos_th, phi = btk.isotropic_cm(nsamp, rng)
         v_n = btk.neutron_lab_velocity(v_f, v_t, reaction, cos_th, phi)
         n_hat = v_n / np.linalg.norm(v_n, axis=-1, keepdims=True)
-        mu = n_hat @ n_los                                   # cos(angle to LOS)
+        nl = n_los[z] if per_zone_los else n_los
+        mu = n_hat @ nl                                      # cos(angle to LOS)
         in_cone = mu >= cos_alpha
         # P(n_los) [1/sr] = (weight fraction in cone) / cone solid angle
         P = (w[in_cone].sum() / wsum) / cone_solid
