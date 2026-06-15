@@ -1255,11 +1255,18 @@ not pure DD — earlier notes were wrong. Use the **DT** channel for KM14.
 `los_th_bt_ratio --channel dt` `Sum(TH·f·DVOL)` exactly), BT 3.82e17 n/s (0.7%
 vs the flux-profile integral). **The model TH (magenta) lands on the Nocente
 fitted Th component (8.40 MeV, FWHM 0.47); B-th (lime) ≈ their B-th (peak 8.56,
-FWHM 1.15 MeV).** Key physics: the LOS-weighted TH/BT ≈ **53%** sits between the
-Nocente ρ<0.2 proxy (**25–31%**) and the measured **~59%** — i.e. the LOS
-weighting explains most of the discrepancy they attributed to core Ti/n_d. The
-model omits the **Scatt** background (detector/environment, not emission), so the
-total slightly underfits the 7.6–8.0 MeV low-energy shoulder.
+FWHM 1.15 MeV).** The model omits the **Scatt** background (detector/environment,
+not emission), so the total slightly underfits the 7.6–8.0 MeV low-energy shoulder.
+
+**On the TH/BT discrepancy (user-corrected 2026-06-15).** Nocente's low ρ<0.2 TH/BT
+(**25–31%**) was *not* a LOS effect — it was the **tritium concentration of their
+TRANSP run 104614M13** (T/(D+T)≈**0.53**). High tritium lowers n_D at fixed n_e, so
+thermal-DT (∝ n_D·n_T) is suppressed relative to beam-D-on-thermal-T BT (∝ n_fast·n_T;
+n_T largely cancels in the ratio, the depressed n_D does not). **M29 has
+T/(D+T)≈0.31** (vol-avg ρ<0.2; axis 0.305): on M29, ρ<0.2 TH/BT = **0.627**,
+LOS-weighted = **0.53**, both bracketing the measured **~0.59**. So TRANSP with a
+realistic tritium fraction already matches the data; the KM14 LOS weighting is a
+**secondary ~15% effect** (core 0.63 → LOS 0.53, the chord seeing BT-richer wings).
 
 ## CLI
 ```bash
