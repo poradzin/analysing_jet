@@ -123,21 +123,35 @@ class CdfEquilibrium:
         pn = np.clip(pn, 0.0, 1.0)
         return np.clip(np.interp(pn, self._psin_b, self._rhot_b), 0.0, 1.0)
 
-    def rhot_pinned(self, R, Z):
+    def rhot_pinned(self, R, Z, Rb=None, Zb=None):
         """rhot at (R, Z) [m] via cubic griddata of psi_n with the magnetic axis
-        pinned at psi_n = 0.
+        pinned at psi_n = 0 and (when ``Rb``/``Zb`` given) the LCFS at psi_n = 1.
 
         Bilinear interpolation of the coarse PSIRZ grid (dR ~ 2 cm) cannot reach
         the true axis minimum (psi is paraboloidal with its vertex between
         nodes), flooring psi_n at ~3e-4, i.e. rhot ~ 0.02 -- so the innermost
         f(rhot) bins get no LOS volume. Injecting the axis as a scattered node
-        removes the floor. Mirrors ``los_thermal_rate.EqCDF.rhot_on_grid``.
+        removes the floor. Symmetrically, the cubic fit also floors *short* of
+        psi_n = 1 inside the LCFS (max ~0.999), starving the outermost f(rhot)
+        bins so the weight craters near rhot = 1; passing the LCFS polygon
+        (``Rb``, ``Zb`` [m], the same one used for the inside mask) pins it at
+        psi_n = 1 and removes that crater. Mirrors
+        ``los_thermal_rate.EqCDF.rhot_on_grid``.
         """
         from scipy.interpolate import griddata
         Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
-        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag]])
-        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag]])
-        pts_psin = np.concatenate([self.psin.ravel(), [0.0]])
+        pin_R = [self.Rmag]
+        pin_Z = [self.Zmag]
+        pin_psin = [0.0]
+        if Rb is not None and Zb is not None:
+            Rb = np.asarray(Rb).ravel()
+            Zb = np.asarray(Zb).ravel()
+            pin_R = np.concatenate([pin_R, Rb])
+            pin_Z = np.concatenate([pin_Z, Zb])
+            pin_psin = np.concatenate([pin_psin, np.ones(Rb.size)])
+        pts_R = np.concatenate([Rg_n.ravel(), pin_R])
+        pts_Z = np.concatenate([Zg_n.ravel(), pin_Z])
+        pts_psin = np.concatenate([self.psin.ravel(), pin_psin])
         query = np.column_stack([np.asarray(R).ravel(), np.asarray(Z).ravel()])
         pd = griddata((pts_R, pts_Z), pts_psin, query, method="cubic")
         if np.any(np.isnan(pd)):
@@ -373,9 +387,11 @@ def main(argv=None):
     if Z[0] <= eq.Zmag <= Z[-1]:
         Z = np.unique(np.concatenate([Z, [eq.Zmag]]))
     Rg, Zg = np.meshgrid(R, Z, indexing="ij")
-    # rhot_pinned (griddata + pinned axis) instead of plain bilinear eq.rhot,
-    # so f(rhot) reaches ~1 on axis (see rhot_pinned docstring).
-    rhot = eq.rhot_pinned(Rg.ravel(), Zg.ravel()).reshape(Rg.shape)
+    # rhot_pinned (griddata + pinned axis + pinned LCFS) instead of plain
+    # bilinear eq.rhot, so f(rhot) reaches ~1 on axis and is not starved near
+    # rhot = 1 (see rhot_pinned docstring). Pin the LCFS with the same (Rb, Zb)
+    # used for the inside mask so field and mask stay consistent at the edge.
+    rhot = eq.rhot_pinned(Rg.ravel(), Zg.ravel(), Rb=Rb, Zb=Zb).reshape(Rg.shape)
     inside = MplPath(np.column_stack([Rb, Zb])).contains_points(
         np.column_stack([Rg.ravel(), Zg.ravel()])).reshape(Rg.shape)
     print(f"chord   : R[{R[0]:.2f},{R[-1]:.2f}] x Z[{Z[0]:.2f},{Z[-1]:.2f}] m, "

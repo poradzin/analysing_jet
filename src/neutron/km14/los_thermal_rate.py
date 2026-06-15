@@ -260,9 +260,20 @@ class EqCDF:
         # one method.
         from scipy.interpolate import griddata
         Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
-        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag]])
-        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag]])
-        pts_psin = np.concatenate([self.ceq.psin.ravel(), [0.0]])
+        # Pin the magnetic axis at psi_n = 0 (see note above) AND the LCFS
+        # polygon at psi_n = 1. Without the boundary pin the cubic PSIRZ
+        # interpolation floors short of 1 inside the polygon mask (max psi_n
+        # ~0.999 on the coarse ~2 cm grid), so rhot never reaches 1.0 inside the
+        # masked region. The outermost TRANSP shell [~0.995, 1.0] is then starved
+        # of LOS cells and f(rhot) craters in the last 1-2 bins. Adding the LCFS
+        # as psi_n = 1 scattered nodes forces rhot -> 1 at the boundary (the
+        # edge-side counterpart of the axis pin), so boundary cells land in the
+        # correct outermost shell.
+        Rb, Zb = self.lcfs()
+        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag], Rb])
+        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag], Zb])
+        pts_psin = np.concatenate([self.ceq.psin.ravel(), [0.0],
+                                   np.ones(Rb.size)])
 
         Rg, Zg = np.meshgrid(R, Z, indexing='ij')
         query = np.column_stack([Rg.ravel(), Zg.ravel()])
@@ -331,9 +342,14 @@ class EqPPF:
         Zg_n = np.asarray(eq._psirzmg[1])
         psin_flat = np.asarray(eq._psi_norm[tind_eq]).ravel()
 
-        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag]])
-        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag]])
-        pts_psin = np.concatenate([psin_flat, [0.0]])
+        # Pin the magnetic axis at psi_n = 0 and the LCFS contour at psi_n = 1
+        # so rhot reaches 1.0 at the boundary; otherwise the cubic interpolation
+        # floors short of 1 inside the mask and the outermost f(rhot) bins are
+        # starved (the edge-side counterpart of the axis pin; see EqCDF).
+        Rb, Zb = self.lcfs()
+        pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag], Rb])
+        pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag], Zb])
+        pts_psin = np.concatenate([psin_flat, [0.0], np.ones(Rb.size)])
 
         Rg, Zg = np.meshgrid(R, Z, indexing='ij')
         query = np.column_stack([Rg.ravel(), Zg.ravel()])

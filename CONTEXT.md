@@ -279,6 +279,49 @@ two are the only callers (grepped). Any future caller needs `rmag=` too. The
 `(TH/BT)_LOS` ↔ cumulative-ratio consistency in `los_th_bt_ratio.py` is
 unchanged (M29 0.5294 vs 0.5299; M30 0.5046 vs 0.5050).
 
+## RESOLVED 2026-06-15 — last-bin `f(rhot)` crater near rhot=1 (LCFS pin)
+
+User saw `f(rhot)` plunge sharply in the outermost 1-2 bins (104614 M29,
+t=53.527 s: f = 0.22 → 0.16 → 0.055 over rhot 0.99→0.998), distinct from the
+smooth `1/r`-like decline expected for a vertical chord.
+
+**Two compounding causes, one physical and one artifact:**
+1. **Physical (dominant).** The KM14 chord `R∈[2.70,3.10]` is offset *inboard*
+   of the axis (Rmag≈3.038, only 6 cm inside Rmax but 34 cm inside Rmin). The
+   LCFS top/bottom points sit at R≈2.64/2.66 m — ~4-6 cm *inboard* of Rmin —
+   so the chord misses the plasma tips and the outermost flux shells enter the
+   band only as thin slivers → genuinely small `f`. Confirmed: moving Rmin to
+   2.60/2.50 m fills the edge back in (last-bin f 0.055→0.115→0.160).
+2. **Artifact (the actual fix target).** The cubic griddata of `PSIRZ` floored
+   short of psi_n=1 *inside the boundary-moment polygon mask* (max psi_n≈0.9989
+   on the coarse ~2 cm grid), so rhot never reached 1.0 within the mask. The
+   outermost TRANSP shell [~0.995,1.0] was starved of LOS cells (62 vs
+   237/398/453 in the bins just inside) and the missing volume was redistributed
+   inward — so the crater *deepened* with resolution (0.092 at 100² → 0.045 at
+   300²) instead of converging. (Diagnosed by swapping to a consistent `psin<=1`
+   mask, which removed the crater but spuriously leaked into the PFR/tips:
+   21785 extra cells, all rhot>0.98 at |Z|>1.0, confirming the polygon is the
+   *correct* mask and the rhot field was the problem.)
+
+**Fix — pin the LCFS at psi_n=1 in the griddata node set** (the edge-side
+counterpart of the existing axis pin at psi_n=0), in *both* `EqCDF.rhot_on_grid`
+and `EqPPF.rhot_on_grid`. rhot now reaches 1.0 at the boundary; psi_n inside the
+polygon spans [0,1.0007] (12/66825 cells overshoot, all <1.0007, harmlessly
+clipped). Edge `f` is now smooth and converges (last bin 0.23 at 100², 0.28 at
+300²). `rho_bnd`=0.3070, Rate_LOS/Rate_tor, and total-volume conservation are
+all unchanged (the edge perturbation is negligible — THNTX is already down >3
+decades there). Same griddata pattern in both sources, so the fix is
+source-agnostic.
+
+**Propagated to `los_th_bt_ratio.py`** (same edge crater, same griddata).
+`CdfEquilibrium.rhot_pinned` gained optional `Rb`/`Zb` args; when passed it pins
+those LCFS points at psi_n=1 (the axis-pin counterpart). `main()` passes the
+*same* `Rb, Zb` from `read_lcfs(fi_path)` used for the inside mask, keeping field
+and mask consistent. Backward-compatible (defaults None -> axis-only pin); that
+call site is the only caller (grepped). Verified 104614 M29 idx 2: edge `f` now
+smooth (0.18->0.22->0.28 in the last bins) with f=1 on axis, and the
+`(TH/BT)_LOS` <-> cumulative-ratio consistency is unchanged (0.5294 vs 0.5299).
+
 ## Geometry
 
 The KM14 LOS is a vertical chord above the JET vessel:
