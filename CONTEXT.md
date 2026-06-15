@@ -236,6 +236,49 @@ ppf-vs-cdf bulk diff is otherwise just the equilibrium reconstruction (cdf =
 TRANSP `PSIRZ`; ppf = measured EFTP): M29 `rho_bnd` cdf 0.3070 vs ppf 0.3085
 (~0.5%). M29 is now local at `~/jet/data/104614/M29` (`.CDF` + `_fi`/`_neut` 1–3).
 
+## RESOLVED 2026-06-15 — spurious near-axis `f` dips (enclosed-shell pinning)
+
+User saw `f(rhot)` dip below 1 in the innermost ~5 bins (104614 M29/M30,
+t=53.527 s) — on axis for one run, just off-axis for the other — even though
+those flux shells sit entirely inside the chord R-band and should have `f = 1`.
+
+**Root cause — a volume *redistribution* artifact in `los_shell_fraction`, not
+a volume-loss bug** (total LOS volume is conserved: cumulative `los_vol/DVOL`
+returns to ~1.00 by bin ~7). Near the axis the flux-shell Jacobian
+`dV/drhot → 0`, while one Cartesian (R,Z) cell spans many rhot bins (the Z-cell
+above the axis jumps rhot 0.005→0.032 in one step). The subgrid splat spreads
+each cell's volume *uniformly in rhot*, so it over-fills the innermost bins
+(cum ratio 1.66→1.44→1.11) and starves the next ring (the visible dips). The
+over-fill is hidden by the `f = clip(f,0,1)` clamp, so only the compensating
+starvation shows. M29 vs M30 dip at different rhot because the inserted-axis
+sliver cell lands at a different phase vs the fixed bin edges. A secondary
+`rhot = 0.005` floor (the `rhot(psin)` table starts at `XB[0]=0.005`, so psin=0
+→ rhot 0.005 not 0) adds to the inner over-fill but is minor.
+
+**Fix — analytic `f = 1` for fully-enclosed shells.** `los_shell_fraction`
+gains an `rmag` kwarg. When the axis is inside the R-band it computes
+`rhot_crit` = rhot of the innermost flux surface that reaches either R boundary
+(min over Z, inside the LCFS, of rhot at the Rmin/Rmax columns) and pins
+`f = 1` for every bin whose **upper edge** ≤ `rhot_crit`. The straddling
+transition bin and the genuinely-partial outer shells keep their binned value,
+so no over-pinning. Encodes the physical expectation: a shell fully within
+R∈[Rmin,Rmax] is swept in its entirety → `f ≡ 1`. (Alternative considered and
+rejected: Jacobian-weighted splat — more faithful but more invasive.)
+
+Verified on M29/M30 (t=53.527 s): clean `f = 1` plateau from rhot=0.0025 to
+~0.0575, first genuine roll-off at ~0.0625 (axis R≈3.038 m, R_MAX=3.10 →
+ΔR≈0.06 m → rhot≈0.06, as expected). Consistency sum `Σ(THNTX·DVOL·f)` shifts
+only +0.09 % (M29 +8.5e-4, M30 +1.0e-3), staying ~0.85 % from `Rate_tor` (the
+inherent Cartesian-trapz vs TRANSP-DVOL discretisation, unchanged).
+
+**Both callers must opt in via `rmag=`.** `main()` now passes `rmag=Rmag`.
+`los_th_bt_ratio.py` imports the *same* `los_shell_fraction` (no duplicate) but
+was calling it without `rmag`, so it still showed the identical dips on
+104614 M29/M30 idx 2 — fixed by passing `rmag=eq.Rmag` at its call site. These
+two are the only callers (grepped). Any future caller needs `rmag=` too. The
+`(TH/BT)_LOS` ↔ cumulative-ratio consistency in `los_th_bt_ratio.py` is
+unchanged (M29 0.5294 vs 0.5299; M30 0.5046 vs 0.5050).
+
 ## Geometry
 
 The KM14 LOS is a vertical chord above the JET vessel:

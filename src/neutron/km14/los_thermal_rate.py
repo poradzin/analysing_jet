@@ -457,7 +457,7 @@ def find_rho_bnd(target, xs, cum_emis):
 
 
 def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
-                       subgrid=True):
+                       subgrid=True, rmag=None):
     """LOS-weighted fraction f(rhot) of each TRANSP flux shell.
 
     For every (R, Z) cell of the LOS grid we accumulate the toroidal
@@ -491,6 +491,22 @@ def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
     x_rhot    : 1D TRANSP rhot grid (sorted ascending)
     dvol_x_m3 : 1D TRANSP DVOL converted to m^3 (same shape as x_rhot)
     subgrid   : bool, see above
+    rmag      : float or None. Magnetic-axis R [m]. When given and inside the
+                LOS R-band, every flux shell whose full poloidal extent stays
+                within [R[0], R[-1]] is swept in its entirety by the chord, so
+                ``f == 1`` exactly there; those inner bins are set to 1
+                analytically (see "Enclosed-shell correction" below).
+
+    Enclosed-shell correction
+    -------------------------
+    Near the axis the flux-shell volume Jacobian dV/drhot -> 0, while a single
+    Cartesian (R, Z) cell spans many rhot bins. Both binning modes then
+    mis-share that volume among the innermost bins (over-filling the centre,
+    starving the next ring), producing spurious f < 1 dips even though those
+    shells are entirely inside the R-band and therefore fully seen. We compute
+    ``rhot_crit`` = the rhot of the innermost flux surface that reaches either
+    R boundary (min over Z, inside the LCFS, of rhot at the Rmin/Rmax columns)
+    and pin ``f = 1`` for every bin lying fully inside it.
 
     Returns
     -------
@@ -581,6 +597,18 @@ def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
     with np.errstate(invalid='ignore', divide='ignore'):
         f = np.where(dvol > 0.0, los_vol_bin / dvol, 0.0)
     f = np.clip(f, 0.0, 1.0)
+
+    # Enclosed-shell correction: pin f = 1 for flux shells fully inside the
+    # R-band (see docstring). Only meaningful when the axis sits in the band;
+    # otherwise the innermost shells lie outside the chord (f -> 0, not 1).
+    if rmag is not None and R_arr[0] <= rmag <= R_arr[-1]:
+        col_lo = rhot_los[0, :][inside[0, :]]    # Rmin column, inside LCFS
+        col_hi = rhot_los[-1, :][inside[-1, :]]  # Rmax column, inside LCFS
+        cols = np.concatenate([col_lo, col_hi])
+        if cols.size:
+            rhot_crit = float(cols.min())
+            enclosed = edges[1:] <= rhot_crit    # bin upper edge inside band
+            f = np.where(enclosed, 1.0, f)
     return f, los_vol_bin
 
 
@@ -836,7 +864,7 @@ def main(argv=None):
     dvol_m3 = dvol_sorted * dvol_to_m3
     f_profile, los_vol_bin = los_shell_fraction(
         rhot, inside, R, Z, xs_sorted, dvol_m3,
-        subgrid=not args.no_subgrid,
+        subgrid=not args.no_subgrid, rmag=Rmag,
     )
     thntx_si_profile = thntx_sorted * thntx_to_si      # n/m3/s
     thkm14_si_profile = thntx_si_profile * f_profile   # n/m3/s

@@ -277,7 +277,8 @@ def rhot_weight_profiles(eq, rhot, inside, R, Z, x_th, th_prof, x_bt, bt_prof,
     xs = np.asarray(x_th, float)[order]
     dvol_m3 = np.asarray(dvol, float)[order]
 
-    f, _ = los_shell_fraction(rhot, inside, R, Z, xs, dvol_m3, subgrid=True)
+    f, _ = los_shell_fraction(rhot, inside, R, Z, xs, dvol_m3, subgrid=True,
+                              rmag=eq.Rmag)
 
     th_si = np.asarray(th_prof, float)[order] * 1.0e6        # n/m3/s
     bt_si = _interp_flux_to(x_bt, bt_prof, xs) * 1.0e6       # n/m3/s
