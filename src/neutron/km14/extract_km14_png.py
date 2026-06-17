@@ -11,11 +11,16 @@ the measurement is black markers + error bars; we pick each one out by HSV-hue
 filtering.
 
 Output (default into the same directory as the input PNG, one file per curve):
-    <pulse>_KM14_data.txt    # black markers (data points)
-    <pulse>_KM14_th.txt      # orange dashed
-    <pulse>_KM14_bt.txt      # blue dotted
-    <pulse>_KM14_scatt.txt   # green dash-dot
-    <pulse>_KM14_total.txt   # red solid
+    <pulse>_KM14_data.txt      # data points (E_dep, counts)
+    <pulse>_KM14_data_err.txt  # data points + error bars (E_dep, counts, err)
+    <pulse>_KM14_th.txt        # orange dashed
+    <pulse>_KM14_bt.txt        # blue dotted
+    <pulse>_KM14_scatt.txt     # green dash-dot
+    <pulse>_KM14_total.txt     # red solid
+
+Data points are found from the error-bar geometry (peak per column = stem),
+so points whose marker disk is hidden under the red Total curve are recovered,
+and the error bars are read off the caps (err = half the bar length).
 
 Each text file: two columns, header line. Sorted by E_dep ascending; dashed/
 dash-dot curves have gaps where no matching pixel was found in a column --
@@ -49,7 +54,25 @@ PNG_CAL = dict(x0=129, e0=7.2, x1=725, e1=9.2,
 # "Total" red swatch extends down to ypix~175, just above the Total-curve peak
 # (ypix~184 at the 8.4 MeV peak). Override with --legend-bbox if a different
 # figure has the legend elsewhere.
-DEFAULT_LEGEND_BBOX = (340, 30, 730, 240)
+DEFAULT_LEGEND_BBOX = (560, 30, 730, 240)
+
+# Data-point detection. Each error bar leaves a tall black stem at the point's
+# exact x, so peaks in the per-column black-pixel count locate every point --
+# including those whose marker disk is hidden under a coloured fit curve (the
+# red Total especially). Tuned for the published ~1300x705 px figures.
+DATA_PEAK_MIN_HEIGHT = 6      # min black pixels in a column to be a candidate
+DATA_PEAK_MIN_DISTANCE = 5    # min px between adjacent data points
+DATA_PEAK_MIN_PROMINENCE = 3  # min peak prominence in the column-count profile
+DATA_BAR_MIN_RUN = 5          # min black run (px) kept when reading an error bar
+
+# The central value is read from the marker disk wherever it is visible. The disk
+# is the only black feature both wider than the stem (~3 px) and taller than the
+# caps (~3 rows), so a square binary erosion isolates it; its centroid is the
+# plotted value. Where a fit curve (esp. the red Total) hides the disk, no blob
+# survives within DISK_MATCH_PX of the point and we fall back to the cap midpoint.
+DATA_MARKER_ERODE = 4   # square erosion size (px) isolating marker disks
+DISK_MARKER_MERGE = 3   # merge disk blobs within this many px in x (split disks)
+DISK_MATCH_PX = 4       # max x-distance (px) to bind a disk to a detected point
 
 # Per-curve hue / saturation / value filter parameters.
 # Hue is on [0, 1] as returned by matplotlib's rgb_to_hsv. Hue wraps around if
@@ -93,16 +116,111 @@ def _black_mask(rgb, bright_max=0.30, sat_max=0.15):
     return (bright < bright_max) & (sat < sat_max)
 
 
-def _erode_horizontal(mask, width=2):
-    """Keep only pixels with `width` black neighbours on each side at the same
-    row. Suppresses vertical error-bar lines (1 col wide) and most axis text
-    while leaving filled marker disks intact."""
-    out = mask.copy()
-    for dx in range(1, width + 1):
-        shifted_left = np.zeros_like(mask); shifted_left[:, dx:] = mask[:, :-dx]
-        shifted_right = np.zeros_like(mask); shifted_right[:, :-dx] = mask[:, dx:]
-        out &= shifted_left & shifted_right
-    return out
+def _strip_axis_frame(win, ymin, ymax, xmin, xmax, frac=0.5):
+    """Blank the axis spines: any row/column that is black across more than
+    `frac` of the plot span is a frame line, not data. Done in place so the
+    column-count peak finder and the cap scan don't latch onto the frame."""
+    sub = win[ymin:ymax + 1, xmin:xmax + 1]
+    win[np.where(sub.mean(axis=1) > frac)[0] + ymin, :] = False
+    win[:, np.where(sub.mean(axis=0) > frac)[0] + xmin] = False
+    return win
+
+
+def _error_bar_extent(win, xc, min_run=DATA_BAR_MIN_RUN):
+    """Top/bottom pixel rows of the error bar at the stem column `xc`, or None.
+
+    Read from the single stem column, not a +-1 px band: near the peak the point
+    spacing (~5-7 px) is smaller than the cap width (~13 px), so a band catches
+    neighbouring points' caps and inflates the bar. Keep only black runs
+    >= `min_run` px -- the point's own caps connect to its stem (one long run,
+    or two long runs split by the red curve), whereas a neighbour cap that bleeds
+    into this column is a short isolated run (no stem here) and is dropped."""
+    ys = np.where(win[:, xc])[0]
+    if ys.size == 0:
+        return None
+    gaps = np.where(np.diff(ys) > 1)[0]
+    starts = np.concatenate([[0], gaps + 1])
+    ends = np.concatenate([gaps + 1, [ys.size]])
+    runs = [ys[a:b] for a, b in zip(starts, ends)]
+    kept = [r for r in runs if r.size >= min_run] or runs
+    return int(min(r.min() for r in kept)), int(max(r.max() for r in kept))
+
+
+def _disk_centroids(win, erode=DATA_MARKER_ERODE, merge_px=DISK_MARKER_MERGE):
+    """Centroid (row, col) of each visible marker disk in the windowed black mask.
+
+    A square binary erosion removes the error-bar stems (too narrow) and caps
+    (too short), leaving the disks; labelling gives one blob per visible marker.
+    Disks split in two by a fit curve crossing their middle (two same-x arcs) are
+    merged back by averaging blobs within `merge_px` in x, so the centroid lands
+    on the true disk centre."""
+    from scipy import ndimage  # available in repo env; local import keeps top light
+    eroded = ndimage.binary_erosion(win, structure=np.ones((erode, erode)))
+    lab, n = ndimage.label(eroded)
+    if n == 0:
+        return np.empty((0, 2))
+    cen = np.array(ndimage.center_of_mass(eroded, lab, range(1, n + 1)))
+    cen = cen[np.argsort(cen[:, 1])]
+    groups = [[cen[0]]]
+    for r in cen[1:]:
+        if r[1] - groups[-1][-1][1] <= merge_px:
+            groups[-1].append(r)
+        else:
+            groups.append([r])
+    return np.array([np.mean(g, axis=0) for g in groups])
+
+
+def _extract_data_points(rgb, cal, legend_bbox=None):
+    """Return (E_dep_MeV, counts, err, from_disk) for every data point.
+
+    Points are *located* by the peak in the per-column black-pixel count -- the
+    error-bar stem is black at the point's exact x even when the marker disk is
+    hidden under a fit curve -- so points buried under the red Total curve are
+    recovered. The *central value* is read from the marker disk wherever it is
+    visible (`from_disk=True`); where no disk survives the curve overlap we fall
+    back to the cap midpoint (`from_disk=False`). The error bar is always read
+    from the cap extent in a +-1 px band: 1-sigma = half the cap separation."""
+    from scipy import signal  # available in repo env; local import keeps top light
+    mask = _black_mask(rgb)
+    mask = _apply_legend_bbox(mask, legend_bbox)
+    ymin, ymax = sorted((int(cal["y0"]), int(cal["y1"])))
+    xmin, xmax = sorted((int(cal["x0"]), int(cal["x1"])))
+    win = np.zeros_like(mask)
+    win[ymin:ymax + 1, xmin:xmax + 1] = mask[ymin:ymax + 1, xmin:xmax + 1]
+    win = _strip_axis_frame(win, ymin, ymax, xmin, xmax)
+
+    disks = _disk_centroids(win)            # (row, col) per visible marker
+    disk_x = disks[:, 1] if disks.size else np.empty(0)
+
+    colcount = win[ymin:ymax + 1, xmin:xmax + 1].sum(axis=0)
+    peaks, _ = signal.find_peaks(colcount, height=DATA_PEAK_MIN_HEIGHT,
+                                 distance=DATA_PEAK_MIN_DISTANCE,
+                                 prominence=DATA_PEAK_MIN_PROMINENCE)
+    e_list, c_list, err_list, src_list = [], [], [], []
+    for xc in xmin + peaks:
+        ext = _error_bar_extent(win, xc)
+        if ext is None:
+            continue
+        y_top, y_bot = ext
+        e_val, c_top = _pixel_to_data(float(xc), float(y_top), cal)
+        _, c_bot = _pixel_to_data(float(xc), float(y_bot), cal)
+        # Central value: marker disk if one is bound to this point, else cap mid.
+        on_disk = disk_x.size and np.min(np.abs(disk_x - xc)) <= DISK_MATCH_PX
+        if on_disk:
+            row = disks[int(np.argmin(np.abs(disk_x - xc))), 0]
+            _, c_val = _pixel_to_data(float(xc), float(row), cal)
+        else:
+            c_val = 0.5 * (c_top + c_bot)
+        e_list.append(e_val)
+        c_list.append(c_val)
+        err_list.append(0.5 * (c_top - c_bot))
+        src_list.append(bool(on_disk))
+    e = np.array(e_list)
+    c = np.clip(np.array(c_list), 0.0, None)
+    err = np.array(err_list)
+    from_disk = np.array(src_list, dtype=bool)
+    order = np.argsort(e)
+    return e[order], c[order], err[order], from_disk[order]
 
 
 def _column_centroid(mask, ymin, ymax, xpix):
@@ -114,29 +232,6 @@ def _column_centroid(mask, ymin, ymax, xpix):
         if idx.size == 0:
             continue
         out[i] = ymin + float(np.median(idx))
-    return out
-
-
-def _column_biggest_cluster_center(mask, ymin, ymax, xpix, min_size=3):
-    """For each x-column, return the centre y of the largest contiguous run of
-    True pixels (clusters separated by gaps > 1). Suitable for data markers
-    after horizontal erosion: error-bar end caps shrink to small clusters,
-    the marker survives as the largest cluster."""
-    out = np.full(xpix.size, np.nan, dtype=float)
-    for i, xp in enumerate(xpix):
-        col = mask[ymin:ymax + 1, xp]
-        idx = np.where(col)[0]
-        if idx.size < min_size:
-            continue
-        gaps = np.where(np.diff(idx) > 1)[0]
-        starts = np.concatenate([[0], gaps + 1])
-        ends = np.concatenate([gaps + 1, [idx.size]])
-        sizes = ends - starts
-        b = int(np.argmax(sizes))
-        if sizes[b] < min_size:
-            continue
-        cluster = idx[starts[b]:ends[b]]
-        out[i] = ymin + float(np.mean(cluster))
     return out
 
 
@@ -177,40 +272,37 @@ def _hampel_filter(e, c, window=11, n_sigma=4.0):
 
 
 def extract_curve(img, cal, params, legend_bbox=None):
-    """Run the extraction for one curve. Returns (E_dep_MeV, counts) arrays."""
+    """Run the extraction for one colour curve. Returns (E_dep_MeV, counts).
+
+    Data markers are not handled here -- see _extract_data_points (the markers
+    need error-bar logic, not a per-column hue centroid)."""
     rgb = img[..., :3]
-    if params["color_name"] == "black":
-        # Horizontally erode so vertical error-bar lines (1 col wide) and axis
-        # tick text disappear; only the wider marker disks (and end caps,
-        # rejected later by cluster-size selection) survive.
-        mask = _erode_horizontal(_black_mask(rgb), width=2)
-    else:
-        hue_lo, hue_hi = params["hue"]
-        mask = _hue_mask(rgb, hue_lo, hue_hi,
-                         params["sat_min"], params["val_min"])
+    # Smooth colour curves: per-column centroid of the hue-matched pixels.
+    hue_lo, hue_hi = params["hue"]
+    mask = _hue_mask(rgb, hue_lo, hue_hi, params["sat_min"], params["val_min"])
     mask = _apply_legend_bbox(mask, legend_bbox)
 
     ymin, ymax = sorted((int(cal["y0"]), int(cal["y1"])))
     xpix = np.arange(int(cal["x0"]), int(cal["x1"]) + 1)
-    if params["marker_like"]:
-        ypix = _column_biggest_cluster_center(mask, ymin, ymax, xpix)
-    else:
-        ypix = _column_centroid(mask, ymin, ymax, xpix)
+    ypix = _column_centroid(mask, ymin, ymax, xpix)
 
     keep = np.isfinite(ypix)
     e, cv = _pixel_to_data(xpix[keep].astype(float), ypix[keep], cal)
     order = np.argsort(e)
     e, cv = e[order], np.clip(cv[order], 0.0, None)
-    # Hampel rejection only on the smooth curves -- data markers are sparse
-    # and a marker fluctuating off the trend is real signal, not an outlier.
-    if not params["marker_like"]:
-        e, cv = _hampel_filter(e, cv)
+    e, cv = _hampel_filter(e, cv)
     return e, cv
 
 
 def save_curve(path, e, c, header):
     arr = np.column_stack([e, c])
     np.savetxt(path, arr, fmt="%.4f %.3f", header=header, comments="# ")
+    print(f"  saved {len(e):4d} pts -> {path}")
+
+
+def save_data_with_err(path, e, c, err, header):
+    arr = np.column_stack([e, c, err])
+    np.savetxt(path, arr, fmt="%.4f %.3f %.3f", header=header, comments="# ")
     print(f"  saved {len(e):4d} pts -> {path}")
 
 
@@ -266,22 +358,43 @@ def main(argv=None):
     print(f"Outdir  : {outdir}")
     print(f"Legend  : suppressed bbox = {bbox}")
 
+    rgb = img[..., :3]
     results = {}
+    data_err = None
     for name in args.curves:
-        e, c = extract_curve(img, PNG_CAL, CURVES[name], legend_bbox=bbox)
-        out_path = outdir / f"{pulse}_KM14_{name}.txt"
-        hdr = (f"KM14 {name} curve extracted from {png_path.name}\n"
-               f"# pulse {pulse}\n"
-               f"# columns: E_dep_MeV  counts")
-        save_curve(out_path, e, c, hdr)
-        results[name] = (e, c)
+        if name == "data":
+            # Central value from the marker disk where visible; cap-midpoint
+            # fallback recovers points hidden under a fit curve (see
+            # _extract_data_points). Error bars from the cap extent.
+            e, c, err, from_disk = _extract_data_points(rgb, PNG_CAL, legend_bbox=bbox)
+            ndisk = int(from_disk.sum()); nrec = int((~from_disk).sum())
+            hdr = (f"KM14 data points extracted from {png_path.name}\n"
+                   f"# pulse {pulse}\n"
+                   f"# columns: E_dep_MeV  counts")
+            save_curve(outdir / f"{pulse}_KM14_data.txt", e, c, hdr)
+            hdr_err = (f"KM14 data points + error bars extracted from {png_path.name}\n"
+                       f"# pulse {pulse}; err = half the error-bar length (1-sigma)\n"
+                       f"# value: marker disk where visible, else cap midpoint\n"
+                       f"# columns: E_dep_MeV  counts  err")
+            save_data_with_err(outdir / f"{pulse}_KM14_data_err.txt", e, c, err, hdr_err)
+            print(f"    ({ndisk} from marker disk, {nrec} recovered from caps)")
+            results[name] = (e, c)
+            data_err = (e, c, err, from_disk)
+        else:
+            e, c = extract_curve(img, PNG_CAL, CURVES[name], legend_bbox=bbox)
+            hdr = (f"KM14 {name} curve extracted from {png_path.name}\n"
+                   f"# pulse {pulse}\n"
+                   f"# columns: E_dep_MeV  counts")
+            save_curve(outdir / f"{pulse}_KM14_{name}.txt", e, c, hdr)
+            results[name] = (e, c)
 
     if args.preview:
-        _save_preview(img, results, Path(args.preview).expanduser())
+        _save_preview(img, results, Path(args.preview).expanduser(),
+                      legend_bbox=bbox, data_err=data_err)
     return 0
 
 
-def _save_preview(img, results, out_path):
+def _save_preview(img, results, out_path, legend_bbox=None, data_err=None):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -292,7 +405,7 @@ def _save_preview(img, results, out_path):
     extent = [epx(0), epx(W), cpx(H), cpx(0)]
     fig, ax = plt.subplots(figsize=(9, 6))
     ax.imshow(img, extent=extent, aspect="auto", zorder=0)
-    styles = {"data": ("k", "o", "Data extracted"),
+    styles = {"data": ("magenta", "o", "Data extracted"),
               "th": ("orange", "--", "Th extracted"),
               "bt": ("blue", ":", "B-th extracted"),
               "scatt": ("green", "-.", "Scatt extracted"),
@@ -300,9 +413,31 @@ def _save_preview(img, results, out_path):
     for name, (e, cv) in results.items():
         col, ls, lab = styles.get(name, ("magenta", "-", name))
         if name == "data":
-            ax.plot(e, cv, "o", color=col, ms=2.5, alpha=0.7, label=lab, zorder=5)
+            if data_err is not None:
+                ed, cd, err, from_disk = data_err
+                d = from_disk
+                ax.errorbar(ed[d], cd[d], yerr=err[d], fmt="o", color=col, ms=4.0,
+                            markeredgecolor="white", markeredgewidth=0.4,
+                            ecolor=col, elinewidth=0.8, capsize=2,
+                            label=lab, zorder=10)
+                if (~d).any():
+                    ax.errorbar(ed[~d], cd[~d], yerr=err[~d], fmt="s", color="cyan",
+                                ms=5.0, markeredgecolor="black", markeredgewidth=0.5,
+                                ecolor="cyan", elinewidth=0.9, capsize=2,
+                                label="Recovered (under curve)", zorder=11)
+            else:
+                ax.plot(e, cv, "o", color=col, ms=4.0, alpha=1.0, label=lab,
+                        markeredgecolor="white", markeredgewidth=0.4, zorder=10)
         else:
             ax.plot(e, cv, color=col, lw=1.6, ls=ls, label=lab, zorder=5)
+    if legend_bbox is not None:
+        bx0, by0, bx1, by1 = legend_bbox
+        # bbox is in pixel coords; convert to data coords for the overlay.
+        ex0, ex1 = epx(bx0), epx(bx1)
+        cy0, cy1 = cpx(by0), cpx(by1)
+        ax.plot([ex0, ex1, ex1, ex0, ex0], [cy0, cy0, cy1, cy1, cy0],
+                color="grey", lw=0.8, ls="--", alpha=0.8, zorder=4,
+                label=f"legend bbox (cuts counts > {min(cy0, cy1):.0f})")
     ax.set_xlim(7.2, 9.5); ax.set_ylim(0, 200)
     ax.set_xlabel(r"$E_{dep}$ (MeV)"); ax.set_ylabel("Counts")
     ax.legend(loc="upper right", fontsize=8)
