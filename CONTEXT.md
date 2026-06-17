@@ -469,6 +469,152 @@ Also accepts the `key=value` form (`dda=eftp uid=gszepesi seq=405`).
   windowing, scattering) into the LOS-weighted profile — currently
   THKM14 is purely geometric (no detector physics).
 
+## `--los-file` mode — real KM14 LOS cell file (added 2026-06-17)
+
+M. Nocente supplied the **exact** KM14 line-of-sight geometry as a cell
+cloud: `src/neutron/km14/_KM3.los` (117 424 rows), described in
+`KM3_LoS_readme.txt`. Each row is one LOS cell with 8 columns
+`x, y, z, C, V, u, v, w` in a fixed (discharge-/time-independent)
+right-handed Cartesian frame — poloidal plane = x-z, toroidal plane = x-y:
+
+* `x` tangential/toroidal offset [m] (|x|≤0.098); `y` horizontal in-plane
+  [m]; `z` vertical Z [m]. Cell major radius `R = sqrt(x²+y²)` (x≪y so
+  R≈y to <2 mm). Ranges: R∈[2.60, 3.16], Z∈[−2, 2], ΔZ≈0.020 m uniform,
+  footprint tapers 654→514 cells/slice (real diverging collimated view).
+* `V` cell volume [m³] (~2.4e-6); `C` **etendue weight [m³]** with
+  detector solid angle `Ω = 4π·C/V`, so for the isotropic thermal source
+  the rate of neutrons *reaching the detector* from a cell is
+  `ε·V·Ω/4π = ε·C`. C spans 3+ decades.
+* `u, v, w` unit vector of the emission direction a neutron must have to
+  reach the detector (`w≈0.9997–1.0`, near-vertical). Read & returned but
+  **unused for the isotropic thermal channel**; it is exactly the per-cell
+  `n̂_LOS` the BT angular code (step-2 commit 3) needs.
+
+**Box default updated** to the real footprint: `R_MIN/MAX = 2.60/3.16`
+(was 2.70/3.10). The idealised-box pipeline (Rate_LOS/Rate_tor/`rho_bnd`/
+geometric `f`) is unchanged in structure and still runs — it is the
+comparison baseline. The old `rho_bnd=0.3070` reproduces exactly under
+`--Rmin 2.70 --Rmax 3.10` (the scattered-point refactor below is faithful).
+
+**New `--los-file PATH`** adds a detector-weighted block (`read_los_file`
++ `los_file_detector_rate`), computing on the *real* cells:
+* `Rate_chord = Σ ε·V` (real narrow chord, no solid angle) and
+  `Rate_det = Σ ε·C` — **the thermal rate actually reaching KM14**.
+* C-binned shell response → detector-coupling weight
+  `f_det(rhot) = C_bin/DVOL` (dimensionless ~Ω/4π × swept fraction) and
+  `THKM14_det = THNTX·f_det`, with closure `Σ THNTX·DVOL·f_det = Rate_det`.
+  **Anti-aliased binning (added 2026-06-17, default).** The cells are
+  Cartesian, flux surfaces ~cylindrical, so one cell spans several rhot bins
+  (mostly in Z) → point binning makes `f_det` noisy (same artifact as the box
+  path, CONTEXT lines ~403-416). Each cell is given a rhot half-span
+  `0.5(|∂rhot/∂R|·dR + |∂rhot/∂Z|·dZ)` and its C spread over that range via the
+  shared `_subgrid_bin` helper (now also used by `los_shell_fraction`). Local
+  `|∇rhot|` from a dense structured field (`RegularGridInterpolator`); per-cell
+  `dZ` = z-slice spacing (≈0.0201 m, uniform), `dR = √(V/dZ)` (a cell is ~one
+  slice thick, ≈11 mm). The cells are *not* a regular poloidal lattice — each
+  carries its own volume `V≈2.4e-6 m³` (≈13 mm). Result: bin-to-bin
+  `|Δf_det|/f_det` median drops ~14× (0.24→0.017), `Rate_det` unchanged,
+  closure improves to 3.5e-5. `--no-subgrid` reverts to point binning.
+
+  **Near-axis de-artifacting (added 2026-06-17).** Two further fixes so
+  `f_det` is a clean flat plateau over the fully-enclosed core (matching the
+  user's expectation that THKM14_det ∝ THNTX where whole surfaces are captured):
+  1. *DVOL-weighted (Jacobian) splat.* `_subgrid_bin` gained an optional
+     `density=` arg; passing `density=DVOL` distributes each Cartesian cell's
+     weight across the shells it spans ∝ shell volume (the physically correct
+     split — near axis `dV/dρ→0` so a cell holds more volume in its outer-rhot
+     part) instead of uniform-in-rhot. `density=None` reproduces the old
+     overlap/span formula *exactly* (geometric path untouched, 0.3070 preserved).
+     This removes the over-fill(centre)/starve(next ring) oscillation.
+  2. *Enclosed-shell flattening.* `rhot_crit` (innermost surface reaching an
+     R-boundary of the footprint, same formula as the geometric f=1 pin) is
+     computed from the structured rhot grid; bins with `edges<=rhot_crit` are
+     pinned to the DVOL-weighted mean `ΣC_enc/ΣDVOL_enc`. `f_det` is genuinely
+     flat there (verified 0.94–1.04× plateau over [0.018, rhot_crit]); the
+     volume weighting down-weights the under-sampled tiny-DVOL inner bins (the
+     ~13 mm cells barely resolve the axis tube), and `ΣDVOL·f_det` over the
+     region is unchanged so `Rate_det` closure holds. The detector analogue of
+     pinning f=1, but to the real plateau (`f_det≈6.9e-10`, not 1).
+  Net: clean flat `f_det` from rhot=0 to `rhot_crit≈0.124`, then smooth roll-off
+  (104614 M29); `Rate_det`/`rho_50` unchanged, closure 2.4e-4. `--plot` marks
+  `rhot_crit` (cyan) and `rho_50` (black) on the weight panel.
+
+  **Post-`rhot_crit` bump is physical (not an artifact).** `f_det = capture ×
+  ⟨Ω/4π⟩` where capture = `V_bin/DVOL` (geometric shell fraction) and ⟨Ω/4π⟩ =
+  `C_bin/V_bin` (mean detector solid angle from `C`). Just past `rhot_crit`
+  capture *decreases* monotonically (0.83%→0.47% by rho 0.30, as expected — the
+  chord stops enclosing the whole surface) but ⟨Ω/4π⟩ *rises* ~+45% to a peak
+  near rho≈0.2 (real KM14 collimator etendue), so their product bumps ~+4.6%
+  over rho 0.12–0.16 before the capture fall dominates and `f_det` decreases.
+  The residual ±1–2% wiggle for rho>`rhot_crit` is finite-cell sampling noise
+  (117k cells / ~200 shells), not aliasing. Both confirmed by decomposing
+  `f_det` into the two factors. A cosmetic **3-bin running median** is applied
+  to `f_det` *outside* `rhot_crit` (`_running_median3`; enclosed plateau and the
+  physical bump/roll-off preserved, `Rate_det` unchanged as it is summed
+  directly from cells) to suppress the wiggle.
+* Signal-median radius `rho_50` (50 % of `Rate_det` enclosed) as the
+  detector-weighted analogue of `rho_bnd`.
+
+**Refactor enabling it:** `EqCDF`/`EqPPF` gained `_scatter_nodes()` +
+`rhot_at_points(Rq,Zq)` (shared module helper `_rhot_scatter`), so rhot is
+evaluated at the irregular cell cloud with the *same* pinned-axis(ψn=0)+
+pinned-LCFS(ψn=1) griddata as the box; `rhot_on_grid` now just reshapes a
+`rhot_at_points` call (behaviour identical — 0.3070 cross-check).
+
+**First result (104614 M29, t=53.527 s, CDF eq):** 66.1 % of cells inside
+LCFS; `Rate_chord=1.86e15`, `Rate_det=1.82e8 n/s` (closure 1.5e-4);
+`rho_50=0.252` vs idealised-box `rho_bnd=0.3585` (wider chord) — the
+solid-angle weighting pulls the effective radius **inward** (Ω largest
+looking straight up through the core), as expected. Runs <1 s.
+`--save` adds `f_det, THKM14_det` columns; `--plot` overlays the
+normalised `f_det` and `rho_50` on the weight/profile panels, and panel
+(1,0) scatters the real LOS cells (coloured by `log10 C` = etendue) over the
+simplified box rectangle. That panel shows the real LOS is a **slanted,
+narrow band** (tilts outboard with height; C peaks in a central strip and
+tapers at the footprint edges), not the vertical box — which is why `rho_50`
+is more core-concentrated than the box `rho_bnd`.
+
+## `los_th_bt_ratio.py` `--los-file` — exact BT emission directions (added 2026-06-17)
+
+`los_th_bt_ratio.py --bt-aniso` weights each NUBEAM zone's BT rate by the
+directional factor `g = (dEps/dΩ toward detector)/(Eps/4π)`, MC-sampled along a
+per-zone LOS direction. That direction was a **point-detector approximation**
+(zone → a point at `--detector-R`, `--detector-height` above Zmag, zero toroidal
+component). New **`--los-file _KM3.los`** replaces it with the file's **exact
+per-cell versor `(u,v,w)`**: detector-Cartesian (x=toroidal, y=radial, z=vert)
+→ `(R,φ,Z)` MC basis as **`(v, u, w)`** (restores the small toroidal tilt the
+point model zeroed). `los_directions_for_zones` griddata-interpolates the versor
+field onto each zone `(Rz,Zz)`; zones outside the LOS footprint keep the
+point-detector estimate. `bt_anisotropy_factors` gained the override + a
+diagnostic (zones-in-footprint, angular diff vs point model); `tilt`/`ang_bL`
+now computed from the final direction.
+
+**104614 M29 idx2 dd, --bt-aniso:** 79/220 zones in footprint; real dirs differ
+from point-detector by med/max **0.6/1.4°**; `<g>_BT` 1.0044 → 1.0042,
+`(TH/BT)_LOS` shift −0.43% → −0.42% — negligible (KM14 BT ≈ isotropic, LOS ≈
+vertical, as commit 3 found), but the input is now exact. Default (no
+`--bt-aniso`/`--los-file`) path unchanged: `(TH/BT)_LOS = 0.3708`.
+
+**`--los-file` also adds real-LOS plots + C-weighted cumulative TH/BT (without
+needing `--bt-aniso`).** `main()` computes the per-shell detector coupling
+`f_det = C_bin/DVOL` by reusing `los_thermal_rate.los_file_detector_rate` (build
+an `EqCDF(cdf_path, fi['time']+40)`; `f_det` is emissivity-independent so the TH
+profile is passed just to satisfy the signature), then applies it to *both* TH
+and BT (BT≈isotropic for KM14 → same etendue coupling) for a real-detector
+cumulative `Σ(TH·f_det·DVOL)/Σ(BT·f_det·DVOL)`. `make_plot(..., los_det=)`:
+(0,2) overlays the real LOS cells (lime) on the TH/BT-local map; (1,0) overlays
+normalised `f_det` + `rhot_crit`; (1,3) overlays the C-weighted cumulative TH/BT
+(magenta) beside the geometric-LOS (cyan) and full-plasma (grey). Local TH/BT
+(1,2) is weight-independent (= TH/BT, cancels) so unchanged. 104614 M29 total:
+C-weighted cum (TH/BT)_LOS=0.540 vs geometric-LOS 0.535 vs full-plasma 0.439 —
+the etendue weights the core (higher TH/BT) slightly more. Default path
+(no `--los-file`) unchanged.
+
+Remaining idea (bigger, not done): a full per-cell BT directional LOS integral
+`Σ eps_BT(rhot, n̂=(u,v,w))·C` mirroring the thermal `Σε·C`, instead of the
+per-zone flux-averaged `g`. Only worth it if higher-fidelity BT anisotropy is
+needed; current `g`-based treatment is adequate given the <0.5% effect.
+
 ---
 
 # `bt_poloidal_distribution.py` — context (added 2026-05-27)
@@ -1296,26 +1442,63 @@ is hard-coded (same `PNG_CAL` as `km14_spectrum.py`: x-ticks 7.2–9.2 MeV at px
 129–725, y-spine 0–200 counts at px 584–32).
 
 * **Curve filter.** HSV-hue ranges per component (Th orange 0.05–0.13, B-th blue
-  0.55–0.72, Scatt green 0.30–0.40, Total red 0.93–0.07 wrap, Data black). For
-  each x-pixel column inside the plot area, takes the **median y** of pixels
-  matching the colour → centroid of the line. Sat/val floors keep axis text out.
-* **Data markers.** Black filled disks would also catch error bars and axis
-  text on a plain "topmost black pixel" rule (this was the first version's
-  failure mode — data file came out at ~200 counts everywhere, biased by axis
-  labels and error-bar tops). Fixed by **horizontally eroding** the black mask
-  (a pixel survives only if its 2-col neighbours at the same row are also
-  black), which kills 1-col-wide error bars and most axis text, then **picking
-  the centre of the largest contiguous y-cluster per column** (the marker disk
-  beats the small end-cap clusters).
-* **Legend suppression.** The Nocente figure's in-plot legend overlaps the
-  data region. A hard-coded bbox `(340, 30, 730, 240)` zeroes that pixel area
-  before extraction (overridable with `--legend-bbox x0,y0,x1,y1`).
-* **Outlier rejection.** Smooth curves (everything except data) go through a
-  Hampel filter (window=11, n_sigma=4) after column-centroid extraction; dash
-  patterns produce gaps which the downstream `np.interp` fills.
-* **Preview.** `--preview out.png` writes a sanity-check overlay of all
-  extracted curves on the input image. Use it iteratively when retargeting to
-  a different pulse's figure.
+  0.55–0.72, Scatt green 0.30–0.40, Total red 0.93–0.07 wrap). For each x-pixel
+  column inside the plot area, takes the **median y** of pixels matching the
+  colour → centroid of the line, then a Hampel filter (window=11, n_sigma=4)
+  drops outliers. Dash patterns leave gaps which downstream `np.interp` fills.
+
+* **Data points + error bars — rewritten 2026-06-17.** The marker is a black
+  filled disk (~8×7 px) on a vertical error-bar stem (~3 px wide) with two
+  horizontal caps (~3 rows tall, ~13 px wide). Extraction (`_extract_data_points`)
+  now returns `(E, counts, err, from_disk)` and is driven by the error-bar
+  geometry, in this order:
+  1. **Locate every point** by peaks in the per-column black-pixel count
+     (`scipy.signal.find_peaks`, params `DATA_PEAK_MIN_HEIGHT/DISTANCE/PROMINENCE`).
+     The stem is black at the point's exact x **even when the disk is hidden
+     under a fit curve**, so this recovers points buried under the red Total (and
+     anywhere blue/orange cross a marker). 104614: 78 points found, ~8 px spacing.
+  2. **Central value = marker disk where visible.** A 4×4 binary erosion
+     (`DATA_MARKER_ERODE`) isolates the disk (only feature both wider than the
+     stem and taller than the caps); `_disk_centroids` labels + takes the
+     centroid, merging split-disk arcs (a curve crossing the disk middle) within
+     `DISK_MARKER_MERGE`=3 px in x. If a disk is within `DISK_MATCH_PX`=4 px of a
+     point → value = disk centroid (`from_disk=True`); else → cap midpoint
+     (`from_disk=False`). 104614: 58 from disk, 20 cap-recovered.
+  3. **Error bar from the caps** (`_error_bar_extent`): the 1-σ half-length is
+     half the top↔bottom cap separation, read from the **single stem column**
+     (not a ±1 px band) keeping only black runs ≥ `DATA_BAR_MIN_RUN`=5 px. The
+     value is the cap midpoint (symmetric Poisson bars). Two coupled fixes here:
+     the single column avoids neighbour caps (13 px wide > 5–7 px peak spacing),
+     and the run filter drops a neighbour cap that still bleeds in — it is a
+     short isolated run (no stem at this column), while the point's own caps
+     connect to its stem (long runs, or two long runs where red splits the bar).
+     Result: peak err ~9–14 cnts (≈√N), tail err ~3–5 cnts; the earlier ±1-band
+     read gave 20–40 cnts at the peak.
+
+* **Axis-frame strip** (`_strip_axis_frame`): rows/cols black across >50 % of the
+  plot span are spines, blanked before peak/cap reads (otherwise the column scan
+  hits the 200-cnt top spine and 0-cnt bottom spine → err pinned at ±100).
+
+* **Legend suppression.** The in-plot legend overlaps the data region; default
+  bbox `DEFAULT_LEGEND_BBOX = (560, 30, 730, 240)` zeroes it before extraction
+  (overridable `--legend-bbox x0,y0,x1,y1`, `0,0,0,0` disables). **The bbox is a
+  hard rectangular cut on the data read, not legend-text-only** — its bottom edge
+  maps to a counts level (`counts=(584−ypix)/2.76`), so it must clear the data
+  peak. The old `(340,30,730,240)` bottom edge sat at ypix 240 ≈ **125 counts**
+  over the peak x-band, silently truncating the Total/Data peak (~190 cnts) at
+  125; narrowing x to 560 fixed it.
+
+* **Outputs:** `<pulse>_KM14_data.txt` (E, counts) and
+  `<pulse>_KM14_data_err.txt` (E, counts, err); plus the four curve files. The
+  `from_disk` flag is internal (drives the stdout disk/recovered tally and the
+  preview colouring), not persisted — add a 4th column if downstream weighting
+  wants it. NB: `err` (1-σ) is now available to weight the `km14_spectrum.py`
+  `--th-bt-fit` (which was unweighted for lack of a sigma).
+
+* **Preview.** `--preview out.png` overlays everything on the input image
+  (`ax.imshow`, toggleable): disk values as magenta circles, cap-recovered as
+  cyan squares ("Recovered (under curve)"), both with error bars; the legend
+  bbox is drawn as a grey dashed rectangle labelled with its cut threshold.
 
 ```bash
 python src/neutron/km14/extract_km14_png.py \
@@ -1326,13 +1509,14 @@ Flags: `--pulse --outdir --legend-bbox --curves {data,th,bt,scatt,total} --previ
 Default `--pulse` inferred from PNG filename via regex.
 
 **Pitfalls encountered while building the extractor:**
-1. Topmost-black-pixel rule catches the y-axis "200" label text and error-bar
-   tops → biases data ~20 counts high. Use horizontal erosion + cluster centre.
-2. Legend bbox needs to extend ~25 px below the "Total" swatch — the red
-   line's anti-aliased edge bleeds green/orange hue at the bottom row.
-3. Tightening the green hue from (0.27, 0.42) to (0.30, 0.40) and pushing
-   sat_min from 0.30 to 0.35 was needed to suppress green-shadow contamination
-   from rendered text characters.
+1. **Legend bbox truncates the peak** (see above) — its lower edge is a counts
+   cut; keep it above the Total peak. Visualise it via the preview's dashed box.
+2. **Disk eaten by overlapping curves.** A naive disk-only detector misses every
+   point a fit curve crosses (only ~53–67 of 78 on 104614). The stem-peak locator
+   is curve-independent; disk is used only for the value where it survives.
+3. **Neighbour-cap bleed inflates errors.** Caps (13 px) are wider than the peak
+   point spacing (5–7 px); read the bar from the single stem column + run filter.
+4. **Axis frame leak** pins err at ±100 cnts unless spines are stripped first.
 
 ## New `km14_spectrum.py` analysis flags
 

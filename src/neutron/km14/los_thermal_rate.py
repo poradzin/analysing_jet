@@ -80,8 +80,8 @@ from los_th_bt_ratio import CdfEquilibrium
 # -----------------------------------------------------------------------------
 # Geometric defaults for the KM14 LOS
 # -----------------------------------------------------------------------------
-R_MIN_DEFAULT = 2.70   # inner R limit of the chord [m]
-R_MAX_DEFAULT = 3.10   # outer R limit of the chord [m]
+R_MIN_DEFAULT = 2.60   # inner R limit of the chord [m] (real LOS footprint)
+R_MAX_DEFAULT = 3.16   # outer R limit of the chord [m] (real LOS footprint)
 W_TOR_DEFAULT = 0.40   # effective toroidal width of the chord [m]
 NR_DEFAULT = 100
 NZ_DEFAULT = 100
@@ -155,6 +155,12 @@ def parse_args(argv=None):
     parser.add_argument('--zmargin', type=float, default=Z_MARGIN_DEFAULT,
                         help='Extra Z padding above/below the LCFS extent [m] '
                              f'(default {Z_MARGIN_DEFAULT})')
+    parser.add_argument('--los-file', default=None,
+                        help='Path to the real KM14 LOS cell file (_KM3.los). '
+                             'When given, the detector-weighted thermal rate '
+                             '(Rate_det = sum eps*C) and the C-weighted LOS '
+                             'response profile are computed from the actual '
+                             'cells, in addition to the idealised-chord box.')
     parser.add_argument('--plot', action='store_true',
                         help='Show diagnostic plots.')
     parser.add_argument('--save', action='store_true',
@@ -188,6 +194,54 @@ def read_thermal_slice(cdf_path, th_var, trind):
     thntx_to_si = 1.0e6 if 'CM' in unit_th.upper() else 1.0   # N/CM3/SEC -> n/m3/s
     dvol_to_m3 = 1.0e-6 if 'CM' in unit_dv.upper() else 1.0   # CM**3 -> m^3
     return thntx, x_rhot, dvol, thntx_to_si, dvol_to_m3, unit_th
+
+
+# -----------------------------------------------------------------------------
+# Real KM14 line-of-sight cell file (_KM3.los, supplied by M. Nocente)
+# -----------------------------------------------------------------------------
+def read_los_file(path):
+    """Read the KM14 LOS cell file (``_KM3.los``).
+
+    Each row is one LOS cell with 8 whitespace-separated columns
+
+        x, y, z, C, V, u, v, w
+
+    (see ``KM3_LoS_readme.txt``). All in a fixed, discharge-/time-independent
+    right-handed Cartesian frame: the poloidal plane is x-z, the toroidal plane
+    is x-y, so
+
+      * x       -- tangential (toroidal) offset from the detector poloidal
+                   plane [m] (small, |x| < 0.1 m)
+      * y       -- horizontal in-plane coordinate [m] -- essentially the major
+                   radius; the cell major radius is R = sqrt(x^2 + y^2)
+      * z       -- vertical coordinate Z [m]
+      * C       -- etendue weight [m^3]. The detector solid angle seen from the
+                   cell is Omega = 4*pi*C/V, so for an *isotropic* emitter of
+                   volumetric emissivity eps the rate of neutrons that actually
+                   reach the detector is eps * V * Omega/(4*pi) = eps * C.
+      * V       -- cell volume [m^3]
+      * u, v, w -- unit vector of the emission direction a neutron born in the
+                   cell must have to reach the detector. Needed for the
+                   anisotropic beam-target channel; unused for the isotropic
+                   thermal channel handled here, but read and returned so the
+                   sister script can reuse this loader.
+
+    Returns
+    -------
+    dict with 1-D arrays ``x, y, z, C, V, u, v, w`` plus derived
+    ``R = sqrt(x^2 + y^2)`` and ``Z = z``.
+    """
+    raw = np.loadtxt(path)
+    if raw.ndim != 2 or raw.shape[1] != 8:
+        raise ValueError(
+            f"{path}: expected an (N, 8) table (x,y,z,C,V,u,v,w), "
+            f"got shape {raw.shape}"
+        )
+    x, y, z, C, V, u, v, w = raw.T
+    return {
+        "x": x, "y": y, "z": z, "C": C, "V": V, "u": u, "v": v, "w": w,
+        "R": np.hypot(x, y), "Z": z.copy(),
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -227,6 +281,30 @@ def _boundary_from_moments(d, tind, ntheta=257):
     return R / 100.0, Z / 100.0
 
 
+def _rhot_scatter(Rq, Zq, pts_R, pts_Z, pts_psin, lcfs_RZ, psin_to_rhot):
+    """Evaluate (rhot, inside, psin) at scattered query points (Rq, Zq).
+
+    Shared core of ``EqCDF``/``EqPPF`` -- griddata-cubic of the psi_n node set
+    (PSIRZ grid + pinned axis at psi_n=0 + pinned LCFS at psi_n=1), linear
+    fallback for NaNs, point-in-LCFS-polygon mask, then psi_n -> rhot via the
+    source-specific ``psin_to_rhot`` callable. Works for any-shape flat inputs,
+    so it serves both the dense (R, Z) box grid (via ``rhot_on_grid``) and the
+    irregular cloud of real LOS cells (via ``rhot_at_points``).
+    """
+    from scipy.interpolate import griddata
+    Rq = np.asarray(Rq, dtype=float).ravel()
+    Zq = np.asarray(Zq, dtype=float).ravel()
+    query = np.column_stack([Rq, Zq])
+    psin = griddata((pts_R, pts_Z), pts_psin, query, method='cubic')
+    if np.any(np.isnan(psin)):
+        psin_lin = griddata((pts_R, pts_Z), pts_psin, query, method='linear')
+        psin = np.where(np.isnan(psin), psin_lin, psin)
+    inside = MplPath(lcfs_RZ).contains_points(query)
+    psin_clip = np.clip(np.where(np.isnan(psin), 1.0, psin), 0.0, 1.0)
+    rhot = np.clip(np.asarray(psin_to_rhot(psin_clip)), 0.0, 1.0)
+    return rhot, inside, psin
+
+
 class EqCDF:
     """Self-contained equilibrium from the TRANSP main CDF (no ppf)."""
 
@@ -249,49 +327,39 @@ class EqCDF:
     def lcfs(self):
         return self._Rb, self._Zb
 
-    def rhot_on_grid(self, R, Z):
-        # Scattered psi_n(R, Z) from the TRANSP PSIRZ grid, with the magnetic
-        # axis pinned at psi_n = 0. Plain bilinear interpolation of the coarse
-        # PSIRZ grid (dR ~ 2 cm) cannot recover the true axis minimum -- psi is
-        # paraboloidal with its vertex between nodes, so bilinear floors psi_n
-        # at ~3e-4, i.e. rhot ~ 0.02. That zeroes the innermost f(rhot) bins
-        # (THKM14 = 0 on axis). Pinning the axis as a scattered node removes the
-        # floor, mirroring EqPPF.rhot_on_grid so both equilibrium sources use
-        # one method.
-        from scipy.interpolate import griddata
+    def _scatter_nodes(self):
+        """psi_n node set for griddata: PSIRZ grid + pinned axis + pinned LCFS.
+
+        The magnetic axis is pinned at psi_n = 0 because plain interpolation of
+        the coarse PSIRZ grid (dR ~ 2 cm) cannot recover the true paraboloidal
+        axis minimum (it floors psi_n ~ 3e-4, i.e. rhot ~ 0.02, zeroing the
+        innermost f(rhot) bins). The LCFS polygon is pinned at psi_n = 1 because
+        the cubic interpolation otherwise floors short of 1 inside the mask
+        (max psi_n ~ 0.999), starving the outermost flux shell of LOS cells and
+        cratering f(rhot) in the last 1-2 bins.
+        """
         Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
-        # Pin the magnetic axis at psi_n = 0 (see note above) AND the LCFS
-        # polygon at psi_n = 1. Without the boundary pin the cubic PSIRZ
-        # interpolation floors short of 1 inside the polygon mask (max psi_n
-        # ~0.999 on the coarse ~2 cm grid), so rhot never reaches 1.0 inside the
-        # masked region. The outermost TRANSP shell [~0.995, 1.0] is then starved
-        # of LOS cells and f(rhot) craters in the last 1-2 bins. Adding the LCFS
-        # as psi_n = 1 scattered nodes forces rhot -> 1 at the boundary (the
-        # edge-side counterpart of the axis pin), so boundary cells land in the
-        # correct outermost shell.
         Rb, Zb = self.lcfs()
         pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag], Rb])
         pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag], Zb])
         pts_psin = np.concatenate([self.ceq.psin.ravel(), [0.0],
                                    np.ones(Rb.size)])
+        return pts_R, pts_Z, pts_psin
 
+    def rhot_at_points(self, Rq, Zq):
+        """(rhot, inside, psin) at scattered query points (flat arrays)."""
+        pts_R, pts_Z, pts_psin = self._scatter_nodes()
+        Rb, Zb = self.lcfs()
+        return _rhot_scatter(
+            Rq, Zq, pts_R, pts_Z, pts_psin, np.column_stack([Rb, Zb]),
+            lambda p: np.interp(p, self.ceq._psin_b, self.ceq._rhot_b),
+        )
+
+    def rhot_on_grid(self, R, Z):
         Rg, Zg = np.meshgrid(R, Z, indexing='ij')
-        query = np.column_stack([Rg.ravel(), Zg.ravel()])
-
-        psin_dense = griddata((pts_R, pts_Z), pts_psin, query, method='cubic')
-        if np.any(np.isnan(psin_dense)):
-            psin_lin = griddata((pts_R, pts_Z), pts_psin, query, method='linear')
-            psin_dense = np.where(np.isnan(psin_dense), psin_lin, psin_dense)
-        psin_dense = psin_dense.reshape(Rg.shape)
-
-        inside = MplPath(np.column_stack(self.lcfs())).contains_points(
-            query).reshape(Rg.shape)
-
-        psin_clip = np.clip(np.where(np.isnan(psin_dense), 1.0, psin_dense),
-                            0.0, 1.0)
-        rhot = np.clip(np.interp(psin_clip.ravel(), self.ceq._psin_b,
-                                 self.ceq._rhot_b), 0.0, 1.0).reshape(Rg.shape)
-        return rhot, inside, psin_dense
+        rhot, inside, psin = self.rhot_at_points(Rg.ravel(), Zg.ravel())
+        return (rhot.reshape(Rg.shape), inside.reshape(Rg.shape),
+                psin.reshape(Rg.shape))
 
     def native_rhot(self):
         Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
@@ -335,40 +403,36 @@ class EqPPF:
     def lcfs(self):
         return _lcfs_contour(self.eq, self.tind)
 
-    def rhot_on_grid(self, R, Z):
-        from scipy.interpolate import griddata
+    def _scatter_nodes(self):
+        """psi_n node set: PSIRZ grid + pinned axis (psi_n=0) + pinned LCFS (1).
+
+        Same pinning rationale as ``EqCDF._scatter_nodes`` (axis floor and edge
+        crater), so both equilibrium sources share one scattered evaluator.
+        """
         eq, tind_eq = self.eq, self.tind
         Rg_n = np.asarray(eq._psirzmg[0])
         Zg_n = np.asarray(eq._psirzmg[1])
         psin_flat = np.asarray(eq._psi_norm[tind_eq]).ravel()
-
-        # Pin the magnetic axis at psi_n = 0 and the LCFS contour at psi_n = 1
-        # so rhot reaches 1.0 at the boundary; otherwise the cubic interpolation
-        # floors short of 1 inside the mask and the outermost f(rhot) bins are
-        # starved (the edge-side counterpart of the axis pin; see EqCDF).
         Rb, Zb = self.lcfs()
         pts_R = np.concatenate([Rg_n.ravel(), [self.Rmag], Rb])
         pts_Z = np.concatenate([Zg_n.ravel(), [self.Zmag], Zb])
         pts_psin = np.concatenate([psin_flat, [0.0], np.ones(Rb.size)])
+        return pts_R, pts_Z, pts_psin
 
-        Rg, Zg = np.meshgrid(R, Z, indexing='ij')
-        query = np.column_stack([Rg.ravel(), Zg.ravel()])
-
-        psin_dense = griddata((pts_R, pts_Z), pts_psin, query, method='cubic')
-        if np.any(np.isnan(psin_dense)):
-            psin_lin = griddata((pts_R, pts_Z), pts_psin, query, method='linear')
-            psin_dense = np.where(np.isnan(psin_dense), psin_lin, psin_dense)
-        psin_dense = psin_dense.reshape(Rg.shape)
-
+    def rhot_at_points(self, Rq, Zq):
+        """(rhot, inside, psin) at scattered query points (flat arrays)."""
+        pts_R, pts_Z, pts_psin = self._scatter_nodes()
         Rb, Zb = self.lcfs()
-        inside = MplPath(np.column_stack([Rb, Zb])).contains_points(
-            query).reshape(Rg.shape)
+        return _rhot_scatter(
+            Rq, Zq, pts_R, pts_Z, pts_psin, np.column_stack([Rb, Zb]),
+            lambda p: self._psin_to_rhot(p, self.eq, self.time_jet),
+        )
 
-        psin_clipped = np.clip(np.where(np.isnan(psin_dense), 1.0, psin_dense),
-                               0.0, 1.0)
-        rhot = self._psin_to_rhot(psin_clipped.ravel(), eq, self.time_jet)
-        rhot = np.asarray(rhot).reshape(Rg.shape)
-        return rhot, inside, psin_dense
+    def rhot_on_grid(self, R, Z):
+        Rg, Zg = np.meshgrid(R, Z, indexing='ij')
+        rhot, inside, psin = self.rhot_at_points(Rg.ravel(), Zg.ravel())
+        return (rhot.reshape(Rg.shape), inside.reshape(Rg.shape),
+                psin.reshape(Rg.shape))
 
     def native_rhot(self):
         eq, tind_eq = self.eq, self.tind
@@ -472,6 +536,111 @@ def find_rho_bnd(target, xs, cum_emis):
     return float(f_inv(target)), total
 
 
+def _running_median3(a):
+    """3-point running median; endpoints unchanged. Cosmetic de-speckle."""
+    a = np.asarray(a, dtype=float)
+    if a.size < 3:
+        return a.copy()
+    out = a.copy()
+    out[1:-1] = np.median(np.stack([a[:-2], a[1:-1], a[2:]]), axis=0)
+    return out
+
+
+def _subgrid_bin(rhot_c, half, weight, edges, density=None):
+    """Anti-aliased binning: spread each sample over [rhot-half, rhot+half].
+
+    Shared by the box LOS path (:func:`los_shell_fraction`) and the real-cell
+    detector path (:func:`los_file_detector_rate`). A sample at ``rhot_c`` with
+    half-range ``half`` distributes its ``weight`` across the rhot interval and
+    adds to each bin in proportion to its overlap with that interval. Total
+    weight is conserved (zero-half samples drop entirely into their containing
+    bin). Vectorised with ``np.add.at``.
+
+    Parameters
+    ----------
+    density : 1-D array (len = n_bins) or None
+        Optional per-bin density for a **Jacobian-weighted** distribution.
+        With ``density=None`` (default) the sample is spread *uniformly in
+        rhot* (overlap-weighted) -- the original behaviour, used by the box
+        path. When ``density`` is given the within-sample weight goes as
+        ``overlap * density_bin`` (re-normalised per sample so the total is
+        unchanged). Passing ``density = DVOL`` makes the split follow the
+        flux-shell volume, which is the physically correct distribution of a
+        Cartesian cell's volume across shells near the axis (where
+        ``dV/drhot -> 0`` so a cell holds more volume in its outer-rhot part).
+        This removes the near-axis over-fill/starve artifact in ``f_det``
+        without the geometric path's "pin enclosed shells to 1" trick (which
+        is inapplicable because ``f_det`` is not unity there).
+
+    Returns
+    -------
+    binned weight array of shape ``(len(edges) - 1,)``.
+    """
+    rhot_c = np.asarray(rhot_c, dtype=float)
+    half = np.asarray(half, dtype=float)
+    weight = np.asarray(weight, dtype=float)
+    n_bins = len(edges) - 1
+    out = np.zeros(n_bins)
+    if rhot_c.size == 0:
+        return out
+
+    # Clip to [0, 1] so weight isn't spilled outside the physical range.
+    rhot_lo = np.clip(rhot_c - half, 0.0, 1.0)
+    rhot_hi = np.clip(rhot_c + half, 0.0, 1.0)
+    span = rhot_hi - rhot_lo
+
+    i_lo = np.clip(np.searchsorted(edges, rhot_lo, side='right') - 1,
+                   0, n_bins - 1)
+    i_hi = np.clip(np.searchsorted(edges, rhot_hi, side='right') - 1,
+                   0, n_bins - 1)
+    n_per_cell = i_hi - i_lo + 1
+
+    total = int(n_per_cell.sum())
+    flat_cell = np.repeat(np.arange(rhot_c.size), n_per_cell)
+    starts = np.concatenate(([0], np.cumsum(n_per_cell[:-1])))
+    within_offset = np.arange(total) - np.repeat(starts, n_per_cell)
+    flat_bin = np.repeat(i_lo, n_per_cell) + within_offset
+
+    cell_lo_b = rhot_lo[flat_cell]
+    cell_hi_b = rhot_hi[flat_cell]
+    cell_span_b = span[flat_cell]
+    cell_w_b = weight[flat_cell]
+    bin_lo = edges[flat_bin]
+    bin_hi = edges[flat_bin + 1]
+    ovl = np.maximum(
+        0.0, np.minimum(cell_hi_b, bin_hi) - np.maximum(cell_lo_b, bin_lo))
+
+    # Per-(cell, bin) contribution before normalisation.
+    if density is None:
+        contrib = ovl
+    else:
+        contrib = ovl * np.asarray(density, dtype=float)[flat_bin]
+
+    # Per-cell normalisation so each sample's total weight is preserved. For
+    # density=None this norm equals the (clipped) span, recovering the original
+    # ovl/span formula exactly.
+    norm = np.zeros(rhot_c.size)
+    np.add.at(norm, flat_cell, contrib)
+    norm_b = norm[flat_cell]
+
+    zero_span = cell_span_b == 0
+    good = (~zero_span) & (norm_b > 0.0)
+    # Default: zero-span samples deposit their full weight in their one bin.
+    w = np.where(zero_span, cell_w_b, 0.0)
+    w = np.where(good, cell_w_b * contrib / np.where(norm_b > 0.0, norm_b, 1.0), w)
+    # Degenerate span>0 but zero density over the touched bins: fall back to
+    # the uniform (overlap/span) split so weight is never lost.
+    bad = (~zero_span) & (norm_b <= 0.0)
+    if np.any(bad):
+        w = np.where(
+            bad,
+            cell_w_b * ovl / np.where(cell_span_b > 0.0, cell_span_b, 1.0),
+            w,
+        )
+    np.add.at(out, flat_bin, w)
+    return out
+
+
 def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
                        subgrid=True, rmag=None):
     """LOS-weighted fraction f(rhot) of each TRANSP flux shell.
@@ -551,63 +720,13 @@ def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
     else:
         # rhot half-extent across the cell (L1 corner half-range)
         grad_R, grad_Z = np.gradient(rhot_los, R_arr, Z_arr)
-        h_R = 0.5 * np.abs(grad_R) * dR[:, None]
-        h_Z = 0.5 * np.abs(grad_Z) * dZ[None, :]
-        half = h_R + h_Z
-
-        rhot_c = rhot_los.ravel()
-        vol_flat = cell_vol.ravel()
-        half_flat = half.ravel()
-
-        keep = vol_flat > 0.0
-        rhot_c = rhot_c[keep]
-        vol = vol_flat[keep]
-        half_k = half_flat[keep]
-
-        # Clip to [0, 1] so volume isn't spilled outside the physical range.
-        rhot_lo = np.clip(rhot_c - half_k, 0.0, 1.0)
-        rhot_hi = np.clip(rhot_c + half_k, 0.0, 1.0)
-        span = rhot_hi - rhot_lo
-
-        # Which bins each cell touches.
-        i_lo = np.clip(
-            np.searchsorted(edges, rhot_lo, side='right') - 1,
-            0, n_bins - 1,
+        half = (0.5 * np.abs(grad_R) * dR[:, None]
+                + 0.5 * np.abs(grad_Z) * dZ[None, :])
+        keep = cell_vol.ravel() > 0.0
+        los_vol_bin = _subgrid_bin(
+            rhot_los.ravel()[keep], half.ravel()[keep],
+            cell_vol.ravel()[keep], edges,
         )
-        i_hi = np.clip(
-            np.searchsorted(edges, rhot_hi, side='right') - 1,
-            0, n_bins - 1,
-        )
-        n_per_cell = i_hi - i_lo + 1
-
-        # Build flat (cell, bin) assignment vectors.
-        total = int(n_per_cell.sum())
-        flat_cell = np.repeat(np.arange(len(vol)), n_per_cell)
-        starts = np.concatenate(([0], np.cumsum(n_per_cell[:-1])))
-        within_offset = np.arange(total) - np.repeat(starts, n_per_cell)
-        flat_bin = np.repeat(i_lo, n_per_cell) + within_offset
-
-        cell_lo_b = rhot_lo[flat_cell]
-        cell_hi_b = rhot_hi[flat_cell]
-        cell_span_b = span[flat_cell]
-        cell_vol_b = vol[flat_cell]
-        bin_lo = edges[flat_bin]
-        bin_hi = edges[flat_bin + 1]
-        ovl = np.maximum(
-            0.0,
-            np.minimum(cell_hi_b, bin_hi) - np.maximum(cell_lo_b, bin_lo),
-        )
-        # Cells with zero rhot span -> all volume to their single bin.
-        zero_span = cell_span_b == 0
-        weight = np.where(
-            zero_span,
-            cell_vol_b,
-            cell_vol_b * ovl
-            / np.where(cell_span_b > 0, cell_span_b, 1.0),
-        )
-
-        los_vol_bin = np.zeros(n_bins)
-        np.add.at(los_vol_bin, flat_bin, weight)
 
     dvol = np.asarray(dvol_x_m3, dtype=float)
     with np.errstate(invalid='ignore', divide='ignore'):
@@ -626,6 +745,176 @@ def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
             enclosed = edges[1:] <= rhot_crit    # bin upper edge inside band
             f = np.where(enclosed, 1.0, f)
     return f, los_vol_bin
+
+
+# -----------------------------------------------------------------------------
+# Detector-weighted thermal rate from the real KM14 LOS cell file
+# -----------------------------------------------------------------------------
+def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
+                           thntx_to_si, dvol_m3, subgrid=True):
+    """Thermal-neutron quantities from the real KM14 LOS cell cloud.
+
+    Each cell carries its own volume ``V`` and etendue weight ``C`` (with
+    ``C = V * Omega/4pi``, ``Omega`` = detector solid angle from the cell). For
+    the isotropic thermal source the *detector-reaching* rate is therefore
+
+        Rate_det   = sum_cells  eps(rhot_cell) * C_cell      [n/s]
+
+    and the bare real-chord emission (no solid-angle weighting, for comparison
+    with the idealised ``Rate_LOS``) is
+
+        Rate_chord = sum_cells  eps(rhot_cell) * V_cell      [n/s]
+
+    The detector response is also binned onto the TRANSP flux shells to give a
+    LOS detector-coupling weight ``f_det(rhot) = C_bin / DVOL`` (dimensionless,
+    ~Omega/4pi times the swept volume fraction) and the LOS-weighted emissivity
+    ``THKM14_det = THNTX * f_det`` with the same closure as the geometric path:
+    ``sum(THNTX * DVOL * f_det) == Rate_det``.
+
+    Parameters
+    ----------
+    cells       : dict from :func:`read_los_file`
+    eqs         : equilibrium object exposing ``rhot_at_points``
+    xs_sorted   : TRANSP rhot grid (ascending)
+    thntx_sorted: THNTX on ``xs_sorted`` (native CGS units)
+    thntx_to_si : CGS->SI factor for THNTX
+    dvol_m3     : TRANSP DVOL on ``xs_sorted`` in m^3
+
+    Returns
+    -------
+    dict with keys
+        rate_det, rate_chord, rhot_cells, inside_cells, eps_si,
+        c_bin, v_bin, f_det, thkm14_det_si, rate_from_profile,
+        cum_rhot, cum_frac, rho_med, vol_tot, c_tot, n_inside
+    """
+    R = cells["R"]
+    Z = cells["Z"]
+    C = np.asarray(cells["C"], dtype=float)
+    V = np.asarray(cells["V"], dtype=float)
+
+    rhot_c, inside_c, _ = eqs.rhot_at_points(R, Z)
+
+    # Emissivity at each cell (n/m3/s), zeroed outside the LCFS. Reuse the same
+    # padded-PCHIP interpolation used for the box grid (works on any shape).
+    eps_si = thntx_on_grid(xs_sorted, thntx_sorted, rhot_c, inside_c) * thntx_to_si
+
+    sig = eps_si * C                       # per-cell detector-reaching rate
+    rate_det = float(np.sum(sig))
+    rate_chord = float(np.sum(eps_si * V))
+
+    # Bin the etendue / volume onto the TRANSP flux shells (same edges as
+    # los_shell_fraction: midpoints of xs, plus 0 and 1).
+    edges = np.concatenate(([0.0], 0.5 * (xs_sorted[:-1] + xs_sorted[1:]), [1.0]))
+    w_in = inside_c.astype(float)
+    rhot_crit = None
+    if not subgrid:
+        c_bin, _ = np.histogram(rhot_c, bins=edges, weights=C * w_in)
+        v_bin, _ = np.histogram(rhot_c, bins=edges, weights=V * w_in)
+    else:
+        # Anti-aliased binning. The LOS cells are Cartesian while the flux
+        # surfaces are ~cylindrical, so one cell spans several TRANSP rhot bins
+        # (mostly in Z) -> point binning aliases f_det (CONTEXT.md). Give each
+        # cell a rhot half-span 0.5*(|d rhot/dR|*dR + |d rhot/dZ|*dZ) and spread
+        # its weight over that range (same scheme as the box subgrid path).
+        # Local |grad rhot| comes from a dense structured rhot field; per-cell
+        # sizes are dZ = z-slice spacing and dR = sqrt(V/dZ) (a cell is ~one
+        # slice thick, so V ~= dR*dx*dZ with dR ~= dx in the poloidal plane).
+        from scipy.interpolate import RegularGridInterpolator
+        nrg, nzg = 200, 600
+        Rg1 = np.linspace(float(R.min()), float(R.max()), nrg)
+        Zg1 = np.linspace(float(Z.min()), float(Z.max()), nzg)
+        rhot_g, inside_g, _ = eqs.rhot_on_grid(Rg1, Zg1)   # (nrg, nzg), 'ij'
+        gR, gZ = np.gradient(rhot_g, Rg1, Zg1)
+        igR = RegularGridInterpolator((Rg1, Zg1), np.abs(gR),
+                                      bounds_error=False, fill_value=0.0)
+        igZ = RegularGridInterpolator((Rg1, Zg1), np.abs(gZ),
+                                      bounds_error=False, fill_value=0.0)
+        keep = inside_c & (C > 0.0)
+        pts = np.column_stack([R[keep], Z[keep]])
+        dZc = float(np.median(np.diff(np.unique(Z))))
+        dRc = np.sqrt(np.maximum(V[keep], 0.0) / dZc)
+        half = 0.5 * (igR(pts) * dRc + igZ(pts) * dZc)
+        # DVOL-weighted (Jacobian) split: a Cartesian cell's volume is spread
+        # across the shells it spans in proportion to each shell's volume, not
+        # uniformly in rhot. This is the physically correct distribution and
+        # removes the near-axis over-fill/starve dip in f_det (the geometric
+        # path's "pin enclosed shells to 1" fix does not apply -- f_det is not
+        # unity on the plateau). Total C / V are conserved.
+        c_bin = _subgrid_bin(rhot_c[keep], half, C[keep], edges, density=dvol_m3)
+        v_bin = _subgrid_bin(rhot_c[keep], half, V[keep], edges, density=dvol_m3)
+
+        # rhot_crit = innermost flux surface that reaches an R-boundary of the
+        # cell footprint (same construction as the geometric enclosed-shell
+        # correction). Shells inside it are fully swept by the chord.
+        if Rg1[0] <= eqs.Rmag <= Rg1[-1]:
+            col_lo = rhot_g[0, :][inside_g[0, :]]
+            col_hi = rhot_g[-1, :][inside_g[-1, :]]
+            cols = np.concatenate([col_lo, col_hi])
+            if cols.size:
+                rhot_crit = float(cols.min())
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        f_det = np.where(dvol_m3 > 0.0, c_bin / dvol_m3, 0.0)
+
+    # Enclosed-shell flattening. For shells fully inside the chord footprint
+    # (rhot <= rhot_crit) the wide R-band captures the whole poloidal cross
+    # section, so the chord samples a constant toroidal+solid-angle fraction and
+    # f_det is physically *flat* (verified: 0.94-1.04 x plateau over
+    # [0.018, rhot_crit]). The few innermost bins are nonetheless under-sampled
+    # (the ~13 mm cells barely resolve the tiny axis tube, where DVOL -> 0), so
+    # f_det dips/rises there. Pin the enclosed region to its DVOL-weighted mean
+    # -- the detector analogue of the geometric path pinning f = 1 there, but to
+    # the real plateau value since f_det != 1. The volume weighting naturally
+    # down-weights the corrupt tiny-DVOL inner bins, and Sum(DVOL*f_det) over
+    # the region is unchanged so Rate_det closure is preserved.
+    if rhot_crit is not None:
+        enclosed = edges[1:] <= rhot_crit
+        dsum = float(dvol_m3[enclosed].sum())
+        if enclosed.any() and dsum > 0.0:
+            f_det = np.where(enclosed, float(c_bin[enclosed].sum()) / dsum, f_det)
+        # Light 3-bin running median *outside* rhot_crit only, to suppress the
+        # ~1-2% finite-cell sampling wiggle (the physical bump/roll-off survives;
+        # the flat enclosed plateau is left untouched). Cosmetic -- Rate_det
+        # (= sum eps*C) is computed directly from the cells and is unchanged.
+        if subgrid:
+            outside = edges[1:] > rhot_crit
+            f_det = np.where(outside, _running_median3(f_det), f_det)
+
+    thntx_si = thntx_sorted * thntx_to_si
+    thkm14_det_si = thntx_si * f_det
+    # Closure check: profile-reconstructed rate should match Rate_det.
+    rate_from_profile = float(np.sum(thntx_si * dvol_m3 * f_det))
+
+    # Cumulative detector-signal fraction vs rhot -> signal-median radius.
+    order = np.argsort(rhot_c)
+    cum_rhot = rhot_c[order]
+    cum_sig = np.cumsum(sig[order])
+    tot = cum_sig[-1]
+    cum_frac = cum_sig / tot if tot > 0 else np.zeros_like(cum_sig)
+    rho_med = float(np.interp(0.5, cum_frac, cum_rhot)) if tot > 0 else float("nan")
+
+    return {
+        "rate_det": rate_det,
+        "rate_chord": rate_chord,
+        "R_cells": R,
+        "Z_cells": Z,
+        "C_cells": C,
+        "rhot_cells": rhot_c,
+        "inside_cells": inside_c,
+        "eps_si": eps_si,
+        "c_bin": c_bin,
+        "v_bin": v_bin,
+        "f_det": f_det,
+        "thkm14_det_si": thkm14_det_si,
+        "rate_from_profile": rate_from_profile,
+        "cum_rhot": cum_rhot,
+        "cum_frac": cum_frac,
+        "rho_med": rho_med,
+        "rhot_crit": rhot_crit,
+        "vol_tot": float(np.sum(V * w_in)),
+        "c_tot": float(np.sum(C * w_in)),
+        "n_inside": int(np.count_nonzero(inside_c)),
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -651,7 +940,7 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                      Rb, Zb, native, pulse, runid, time_jet, t_eq_jet,
                      eq_label, chan_label, Rmag, Zmag, rho_bnd=None,
                      xs=None, thntx_si_prof=None,
-                     thkm14_si_prof=None, f_prof=None):
+                     thkm14_si_prof=None, f_prof=None, losf=None):
     """Six-panel (2x3) diagnostic:
         (0,0) rhot(R,Z) in LOS region + LCFS + rho_bnd
         (0,1) THNTX(R,Z) in LOS region + LCFS + rho_bnd
@@ -713,6 +1002,22 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
 
     ax3 = axes[1, 0]
     ax3.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
+    # Real KM14 LOS cells (when --los-file given): scatter the actual footprint
+    # coloured by etendue C (detector sensitivity), to compare against the
+    # simplified box rectangle drawn below. Subsample for responsiveness.
+    if losf is not None and 'R_cells' in losf:
+        Rc = np.asarray(losf['R_cells'])
+        Zc = np.asarray(losf['Z_cells'])
+        Cc = np.asarray(losf['C_cells'])
+        ins = np.asarray(losf['inside_cells'])
+        idx = np.where(ins & (Cc > 0))[0]
+        if idx.size > 25000:
+            idx = idx[np.linspace(0, idx.size - 1, 25000).astype(int)]
+        sc = ax3.scatter(Rc[idx], Zc[idx], c=np.log10(Cc[idx]), s=3,
+                         cmap='plasma', alpha=0.55, linewidths=0,
+                         label='real LOS cells')
+        cb = fig.colorbar(sc, ax=ax3, fraction=0.046, pad=0.04)
+        cb.set_label(r'$\log_{10}$ C  [m$^3$]  (etendue)')
     if rho_bnd is not None and np.isfinite(rho_bnd):
         ax3.contour(Rg_n, Zg_n, rhot_native, levels=[rho_bnd],
                     colors='magenta', linewidths=1.4)
@@ -722,13 +1027,15 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax3.plot([Rmag], [Zmag], 'r+', ms=10, label=f'axis ({Rmag:.3f}, {Zmag:.3f})')
     los_box_R = [R[0], R[-1], R[-1], R[0], R[0]]
     los_box_Z = [Z[0], Z[0], Z[-1], Z[-1], Z[0]]
-    ax3.plot(los_box_R, los_box_Z, 'r-', lw=1.0,
-             label=f'LOS box R=[{R[0]:.2f},{R[-1]:.2f}]')
+    ax3.plot(los_box_R, los_box_Z, 'r-', lw=1.2,
+             label=f'simplified box R=[{R[0]:.2f},{R[-1]:.2f}]')
     ax3.axvline(0.5 * (R[0] + R[-1]), color='r', ls=':', lw=0.8,
-                label=f'LOS centre R={0.5*(R[0]+R[-1]):.2f} m')
+                label=f'box centre R={0.5*(R[0]+R[-1]):.2f} m')
     ax3.set_xlabel('R [m]')
     ax3.set_ylabel('Z [m]')
-    ax3.set_title('Poloidal cross-section: LCFS + KM14 LOS')
+    ax3.set_title('Poloidal cross-section: real LOS cells vs simplified box'
+                  if losf is not None else
+                  'Poloidal cross-section: LCFS + KM14 LOS')
     ax3.legend(loc='best', fontsize=8)
     ax3.grid(True, ls=':', lw=0.5)
     ax3.set_aspect('equal', adjustable='box')
@@ -748,7 +1055,16 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
         ax5.plot(xs, thntx_si_prof, 'b-', lw=1.4,
                  label='THNTX (TRANSP)')
         ax5.plot(xs, thkm14_si_prof, 'r-', lw=1.4,
-                 label=r'THKM14 = THNTX$\cdot f$')
+                 label=r'THKM14 = THNTX$\cdot f$ (box)')
+        if losf is not None:
+            # Detector-weighted profile rescaled to the geometric THKM14 peak so
+            # its radial *shape* is comparable on the same axis (f_det carries
+            # the tiny Omega/4pi factor, so the raw curve would be invisible).
+            tk = np.asarray(losf['thkm14_det_si'])
+            scale = (np.nanmax(thkm14_si_prof) / np.nanmax(tk)
+                     if np.nanmax(tk) > 0 else 1.0)
+            ax5.plot(xs, tk * scale, 'm--', lw=1.4,
+                     label=f'THKM14_det (x{scale:.1e}, real LOS)')
         ax5.set_xlabel('rhot')
         ax5.set_ylabel('Emissivity [n/m3/s]')
         ax5.set_title('Emissivity profiles vs rhot')
@@ -762,7 +1078,7 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     # ---- (1, 2): LOS weight function f(rhot) ------------------------
     ax6 = axes[1, 2]
     if xs is not None and f_prof is not None:
-        ax6.plot(xs, f_prof, 'g-', lw=1.4)
+        ax6.plot(xs, f_prof, 'g-', lw=1.4, label='f (box, geometric)')
         ax6.fill_between(xs, 0.0, f_prof, color='g', alpha=0.15)
         ax6.set_xlabel('rhot')
         ax6.set_ylabel(r'$f(\rho_t)$ = LOS shell fraction')
@@ -770,7 +1086,20 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
         if rho_bnd is not None and np.isfinite(rho_bnd):
             ax6.axvline(rho_bnd, color='m', ls=':', lw=1.0,
                         label=f'rho_bnd = {rho_bnd:.4f}')
-            ax6.legend(loc='best', fontsize=8)
+        if losf is not None:
+            # Detector-coupling weight, normalised to its own peak so its shape
+            # overlays the [0,1] geometric f on the same axis.
+            fd = np.asarray(losf['f_det'])
+            fdn = fd / np.nanmax(fd) if np.nanmax(fd) > 0 else fd
+            ax6.plot(xs, fdn, 'm--', lw=1.4, label='f_det (real LOS, norm.)')
+            rc = losf.get('rhot_crit')
+            if rc is not None and np.isfinite(rc):
+                ax6.axvline(rc, color='c', ls=':', lw=1.0,
+                            label=f'rhot_crit = {rc:.3f} (enclosed)')
+            if np.isfinite(losf['rho_med']):
+                ax6.axvline(losf['rho_med'], color='k', ls='-.', lw=1.0,
+                            label=f'rho_50 = {losf["rho_med"]:.4f}')
+        ax6.legend(loc='best', fontsize=8)
         ax6.set_xlim(0.0, 1.0)
         ax6.set_ylim(0.0, 1.05)
         ax6.grid(True, ls=':', lw=0.5)
@@ -967,6 +1296,43 @@ def main(argv=None):
     print(f'  total LOS volume (binned)   = {los_vol_bin.sum():.4e} m^3   '
           f'(consistency check)')
 
+    # ------- Real KM14 LOS cell file (detector-weighted) ----------------
+    losf = None
+    if args.los_file:
+        print()
+        print('============  Real KM14 LOS cell file (_KM3.los)  ============')
+        cells = read_los_file(args.los_file)
+        print(f'  Loaded {cells["R"].size} cells from {args.los_file}')
+        print(f'  Cell R in [{cells["R"].min():.3f}, {cells["R"].max():.3f}] m, '
+              f'Z in [{cells["Z"].min():.3f}, {cells["Z"].max():.3f}] m, '
+              f'|x| <= {np.abs(cells["x"]).max():.3f} m (tangential)')
+        losf = los_file_detector_rate(
+            cells, eqs, xs_sorted, thntx_sorted, thntx_to_si, dvol_m3,
+            subgrid=not args.no_subgrid,
+        )
+        print(f'  Cells inside LCFS    : {losf["n_inside"]} / '
+              f'{cells["R"].size} '
+              f'({100.0 * losf["n_inside"] / cells["R"].size:.1f} %)')
+        print(f'  LOS volume (sum V)   = {losf["vol_tot"]:.4e} m^3  '
+              f'(real narrow chord, cf. box {box_volume:.4e})')
+        print(f'  LOS etendue (sum C)  = {losf["c_tot"]:.4e} m^3  '
+              f'(= sum V*Omega/4pi)')
+        print()
+        print(f'  Rate_chord = sum eps*V = {losf["rate_chord"]:.4e} n/s  '
+              f'(real chord, no solid angle; cf. box Rate_LOS = {rate:.4e})')
+        print(f'  Rate_det   = sum eps*C = {losf["rate_det"]:.4e} n/s  '
+              f'<== thermal rate reaching the KM14 detector')
+        print(f'  closure sum(THNTX*DVOL*f_det) = '
+              f'{losf["rate_from_profile"]:.4e} n/s  '
+              f'(rel. residual {abs(losf["rate_from_profile"] - losf["rate_det"]) / losf["rate_det"]:.2e})')
+        print()
+        print('  --- where does KM14 see its thermal signal? ---')
+        print(f'  signal-median radius rho_50 (50% of Rate_det inside) = '
+              f'{losf["rho_med"]:.4f}')
+        if np.isfinite(rho_bnd):
+            print(f'  (cf. idealised-box equivalent rho_bnd = {rho_bnd:.4f})')
+        print('==============================================================')
+
     if args.save:
         import os
         # Repo-local tmp/ (src/tmp), independent of where the CDFs live, so the
@@ -981,13 +1347,18 @@ def main(argv=None):
             f'{run_id}_KM14_LOS_profile_{args.channel}_{args.eq_source}'
             f'_t{time_jet:.3f}s.txt',
         )
-        data = np.column_stack([
-            xs_sorted,
-            thntx_si_profile,
-            thkm14_si_profile,
-            f_profile,
-            dvol_m3,
-        ])
+        cols = [xs_sorted, thntx_si_profile, thkm14_si_profile, f_profile,
+                dvol_m3]
+        col_hdr = ('    rhot           THNTX [n/m3/s]   '
+                   'THKM14 [n/m3/s]  f               DVOL [m3]')
+        losf_hdr = ''
+        if losf is not None:
+            cols += [losf['f_det'], losf['thkm14_det_si']]
+            col_hdr += '       f_det           THKM14_det [n/m3/s]'
+            losf_hdr = (f'real LOS (_KM3.los): Rate_det = {losf["rate_det"]:.4e} '
+                        f'n/s   Rate_chord = {losf["rate_chord"]:.4e} n/s   '
+                        f'rho_50 = {losf["rho_med"]:.4f}\n')
+        data = np.column_stack(cols)
         np.savetxt(
             out_path, data,
             header=(f'pulse {args.pulse}  TRANSP {args.runid}  '
@@ -999,8 +1370,8 @@ def main(argv=None):
                     f'Rate_LOS = {rate:.4e} n/s   '
                     f'Rate_tor = {rate_tor:.4e} n/s   '
                     f'rho_bnd = {rho_bnd}\n'
-                    f'    rhot           THNTX [n/m3/s]   '
-                    f'THKM14 [n/m3/s]  f               DVOL [m3]'),
+                    f'{losf_hdr}'
+                    f'{col_hdr}'),
             fmt='%.8e',
         )
         print(f'Saved LOS profile to {out_path}')
@@ -1014,7 +1385,7 @@ def main(argv=None):
                          xs=xs_sorted,
                          thntx_si_prof=thntx_si_profile,
                          thkm14_si_prof=thkm14_si_profile,
-                         f_prof=f_profile)
+                         f_prof=f_profile, losf=losf)
 
     return 0
 

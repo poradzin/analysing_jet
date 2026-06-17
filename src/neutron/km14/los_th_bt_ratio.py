@@ -57,6 +57,22 @@ detector solid angle cancels, so the net effect is exactly
 ``(TH/BT)_LOS -> (TH/BT)_LOS / <g>_BT``. Detector at ``--detector-R`` (default
 chord centre 2.90 m), ``--detector-height`` above Zmag (default 10 m).
 
+``--los-file _KM3.los`` replaces that point-detector direction model with the
+**exact** per-cell emission versors ``(u, v, w)`` from M. Nocente's KM14 LOS
+file: the versor (detector Cartesian x=toroidal, y=radial, z=vertical) maps to
+the ``(R, phi, Z)`` MC basis as ``(v, u, w)`` and is interpolated to each zone
+in the LOS footprint (others keep the point-detector estimate). On 104614 M29
+the real directions differ from the point-detector model by only ~0.6 deg
+(median), so ``<g>_BT`` is essentially unchanged (1.0044 -> 1.0042) -- the input
+is now exact rather than approximated.
+
+``--los-file`` also (independently of ``--bt-aniso``) adds the real-LOS detector
+weighting to the plot: the per-shell etendue coupling ``f_det = C_bin/DVOL``
+(reused from ``los_thermal_rate``, emissivity-independent) is applied to both TH
+and BT for a C-weighted cumulative ``Sum(TH f_det DVOL)/Sum(BT f_det DVOL)``,
+overlaid on the geometric-LOS and full-plasma cumulatives, plus the real LOS
+cell footprint over the TH/BT(local) map and ``f_det`` on the weight panel.
+
 CLI
 ---
     python los_th_bt_ratio.py 104614 M30 --idx 1 --plot          # total (default)
@@ -65,7 +81,7 @@ CLI
 
 Flags: --idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone}
        --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot
-       --bt-aniso --detector-R --detector-height --cone-deg --nsamp
+       --bt-aniso --detector-R --detector-height --los-file --cone-deg --nsamp
        --fast-norm {bdens,ntot} --no-rotation --seed
 """
 
@@ -228,6 +244,45 @@ def _bt_reaction_map():
     }
 
 
+def los_directions_for_zones(los_path, Rz, Zz, max_cells=30000, seed=0):
+    """Per-zone emission direction n_los (R, phi, Z) from the real KM14 LOS file.
+
+    Reads ``_KM3.los`` and interpolates its per-cell emission versor onto each
+    NUBEAM zone position ``(Rz, Zz)`` [m]. The file's versor ``(u, v, w)`` is in
+    the detector Cartesian frame (x = toroidal, y = radial since y ~ R,
+    z = vertical), so in the anisotropy MC's ``(R, phi, Z)`` basis it maps to
+    ``(v, u, w)`` -- this also restores the small *toroidal* tilt (u) that the
+    point-detector model zeroes.
+
+    The cell cloud is huge and many cells share nearly the same (R, Z) at
+    different toroidal x; ``griddata`` linear over a random subsample averages
+    those naturally. Zones outside the LOS footprint interpolate to NaN.
+
+    Returns ``(n_los_zone, valid)``: ``n_los_zone`` is (n_zone, 3) unit vectors
+    (NaN rows where invalid) and ``valid`` is the boolean in-footprint mask; the
+    caller falls back to the point-detector direction for invalid zones.
+    """
+    from los_thermal_rate import read_los_file
+    cells = read_los_file(los_path)
+    Rc, Zc = cells["R"], cells["Z"]
+    u, v, w = cells["u"], cells["v"], cells["w"]
+    if Rc.size > max_cells:
+        sel = np.random.default_rng(seed).choice(Rc.size, max_cells, replace=False)
+        Rc, Zc, u, v, w = Rc[sel], Zc[sel], u[sel], v[sel], w[sel]
+    pts = np.column_stack([Rc, Zc])
+    q = np.column_stack([np.asarray(Rz, float).ravel(),
+                         np.asarray(Zz, float).ravel()])
+    nr = griddata(pts, v, q, method="linear")    # R-component  <- y-versor v
+    nph = griddata(pts, u, q, method="linear")   # phi-component <- x-versor u
+    nz = griddata(pts, w, q, method="linear")    # Z-component  <- z-versor w
+    valid = ~(np.isnan(nr) | np.isnan(nph) | np.isnan(nz))
+    n_los = np.column_stack([nr, nph, nz])
+    nrm = np.sqrt(np.nansum(n_los ** 2, axis=1))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        n_los = n_los / np.where(nrm > 0, nrm, np.nan)[:, None]
+    return n_los, valid
+
+
 def bt_anisotropy_factors(fi, cdf_path, bt_keys, det_R, det_Z, args):
     """Per-zone anisotropy factor g(zone) = (dEps/dOmega)/(Eps_4pi/4pi) along the
     line from each zone up to the KM14 detector, for each handled BT component.
@@ -265,12 +320,32 @@ def bt_anisotropy_factors(fi, cdf_path, bt_keys, det_R, det_Z, args):
             X = np.array(d["X"][ti]); OM = np.array(d["OMEGA"][ti])
         vrot_zone = np.interp(fi["x2d"], X, OM) * Rz       # m/s, toroidal (+phi)
 
-    # per-zone LOS direction (R, phi, Z): from the zone up to the detector point
+    # per-zone LOS direction (R, phi, Z). Default: point-detector model -- from
+    # the zone straight up to the detector point (zero toroidal component).
     dR = det_R - Rz
     dZ = det_Z - Zz
     nrm = np.sqrt(dR * dR + dZ * dZ)
     n_los_zone = np.column_stack([dR / nrm, np.zeros_like(dR), dZ / nrm])
-    tilt = np.degrees(np.arctan2(np.abs(dR), dZ))          # off-vertical tilt
+
+    # If the real KM14 LOS cell file is supplied, replace the point-detector
+    # direction by the file's exact (u,v,w) versor wherever the zone falls in
+    # the LOS footprint (others keep the point-detector estimate).
+    los_info = None
+    los_file = getattr(args, "los_file", None)
+    if los_file:
+        n_real, valid = los_directions_for_zones(los_file, Rz, Zz)
+        cosd = np.clip(np.abs(np.einsum("zi,zi->z", n_los_zone,
+                                        np.nan_to_num(n_real))), 0.0, 1.0)
+        dang = np.degrees(np.arccos(cosd))
+        n_los_zone = np.where(valid[:, None], n_real, n_los_zone)
+        los_info = dict(
+            n_used=int(valid.sum()), n_zone=int(valid.size),
+            dang_med=float(np.median(dang[valid])) if valid.any() else float("nan"),
+            dang_max=float(np.max(dang[valid])) if valid.any() else float("nan"),
+        )
+
+    tilt = np.degrees(np.arctan2(
+        np.abs(n_los_zone[:, 0]), np.abs(n_los_zone[:, 2])))   # off-vertical tilt
     ang_bL = np.degrees(np.arccos(np.clip(
         np.abs(np.einsum("zi,zi->z", bhat_zone, n_los_zone)), 0, 1)))
 
@@ -304,7 +379,7 @@ def bt_anisotropy_factors(fi, cdf_path, bt_keys, det_R, det_Z, args):
                 tilt_max=float(tilt.max()),
                 ang_bL=(float(ang_bL.min()), float(np.median(ang_bL)),
                         float(ang_bL.max())),
-                det_R=det_R, det_Z=det_Z)
+                det_R=det_R, det_Z=det_Z, los=los_info)
     return g_map, info
 
 
@@ -475,6 +550,11 @@ def main(argv=None):
                         f"{DET_R_DEFAULT})")
     p.add_argument("--detector-height", type=float, default=DET_HEIGHT_DEFAULT,
                    help=f"detector height above Zmag [m] (default {DET_HEIGHT_DEFAULT})")
+    p.add_argument("--los-file", default=None,
+                   help="real KM14 LOS cell file (_KM3.los). With --bt-aniso, "
+                        "the per-zone emission direction toward the detector is "
+                        "taken from the file's exact (u,v,w) versors instead of "
+                        "the point-detector approximation (--detector-R/-height).")
     p.add_argument("--cone-deg", type=float, default=20.0,
                    help="half-angle of the LOS acceptance cone for the g MC estimator")
     p.add_argument("--nsamp", type=int, default=60000,
@@ -569,8 +649,16 @@ def main(argv=None):
             fi, cdf_path, bt_keys, args.detector_R, det_Z, args)
         bt_zone_eff = sum(neut[k] * g_map[k] for k in bt_keys)
         amn, amed, amx = aniso["ang_bL"]
-        print(f"BT aniso: detector (R,Z)=({aniso['det_R']:.2f},"
-              f"{aniso['det_Z']:.2f}) m, max cone tilt {aniso['tilt_max']:.1f} deg; "
+        if aniso.get("los"):
+            li = aniso["los"]
+            print(f"BT aniso: LOS direction from {args.los_file} "
+                  f"({li['n_used']}/{li['n_zone']} zones in footprint; "
+                  f"vs point-detector model med/max "
+                  f"{li['dang_med']:.1f}/{li['dang_max']:.1f} deg)")
+        else:
+            print(f"BT aniso: detector (R,Z)=({aniso['det_R']:.2f},"
+                  f"{aniso['det_Z']:.2f}) m (point detector), ", end="")
+        print(f"max cone tilt {aniso['tilt_max']:.1f} deg; "
               f"angle(B,LOS) min/med/max {amn:.0f}/{amed:.0f}/{amx:.0f} deg "
               f"(nsamp={args.nsamp}, cone={args.cone_deg:g} deg)")
 
@@ -651,6 +739,36 @@ def main(argv=None):
               f"(flux-averaged BT; differs from zone (TH/BT)_LOS "
               f"= {th_los / bt_los:.4f} by the poloidal asymmetry)")
 
+    # ----- optional real-LOS (etendue C) detector weighting ---------------
+    # f_det(rhot) = C_bin/DVOL is the per-shell detector coupling from the real
+    # KM14 LOS cell file (purely geometric, emissivity-independent), reused from
+    # los_thermal_rate. Apply it to BOTH TH and BT (BT ~ isotropic for KM14, so
+    # the etendue coupling is the same) to get the real-detector cumulative
+    # TH/BT, alongside the geometric-LOS and full-plasma cumulatives.
+    los_det = None
+    if args.los_file:
+        from los_thermal_rate import (EqCDF, los_file_detector_rate,
+                                       read_los_file)
+        eqcdf = EqCDF(cdf_path, fi["time"] + 40.0)   # EqCDF wants JET time
+        cells_los = read_los_file(args.los_file)
+        fres = los_file_detector_rate(
+            cells_los, eqcdf, wp["xs"], wp["th_si"] / 1.0e6, 1.0e6,
+            wp["dvol_m3"])
+        f_det = fres["f_det"]
+        cum_th_d = np.cumsum(wp["th_si"] * f_det * wp["dvol_m3"])
+        cum_bt_d = np.cumsum(wp["bt_si"] * f_det * wp["dvol_m3"])
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ratio_cum_det = np.where(cum_bt_d > 0, cum_th_d / cum_bt_d, np.nan)
+        los_det = dict(
+            f_det=f_det, ratio_cum_det=ratio_cum_det,
+            rhot_crit=fres["rhot_crit"], thbt_det=float(ratio_cum_det[-1]),
+            R_cells=fres["R_cells"], Z_cells=fres["Z_cells"],
+            C_cells=fres["C_cells"], inside_cells=fres["inside_cells"])
+        print(f"  real-LOS (C-weighted) cumulative (TH/BT)(rhot=1) = "
+              f"{los_det['thbt_det']:.4f}   "
+              f"(geometric-LOS {wp['ratio_cum'][-1]:.4f}, "
+              f"full plasma {wp['ratio_cum_plasma'][-1]:.4f})")
+
     plot_label = chan_label + (" [BT aniso]" if args.bt_aniso else "")
     if args.save:
         _save_weight_profile(wp, run_id, idx, chan_label, th_var, bt_keys,
@@ -659,7 +777,7 @@ def main(argv=None):
     if (args.plot or args.save) and not args.no_plot:
         make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
                   Rb, Zb, run_id, idx, plot_label, th_los, bt_los, wp,
-                  save=args.save)
+                  save=args.save, los_det=los_det)
     return 0
 
 
@@ -696,7 +814,8 @@ def _save_weight_profile(wp, run_id, idx, chan_label, th_var, bt_keys,
 
 
 def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
-              Rb, Zb, run_id, idx, chan_label, th_los, bt_los, wp, save=None):
+              Rb, Zb, run_id, idx, chan_label, th_los, bt_los, wp, save=None,
+              los_det=None):
     import matplotlib
     if save is not None:
         matplotlib.use("Agg")
@@ -726,6 +845,17 @@ def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
         fig.colorbar(pc, ax=a)
         a.set_aspect("equal"); a.set_xlabel("R [m]"); a.set_ylabel("Z [m]")
         a.set_title(ttl)
+    # Real KM14 LOS footprint overlaid on the TH/BT(local) map: shows which part
+    # of the ratio field the detector actually samples (slanted, narrow band).
+    if los_det is not None:
+        ins = np.asarray(los_det["inside_cells"])
+        Rc = np.asarray(los_det["R_cells"]); Zc = np.asarray(los_det["Z_cells"])
+        sel = np.where(ins)[0]
+        if sel.size > 15000:
+            sel = sel[np.linspace(0, sel.size - 1, 15000).astype(int)]
+        ax[0, 2].scatter(Rc[sel], Zc[sel], s=1.0, c="lime", alpha=0.12,
+                         linewidths=0)
+        ax[0, 2].set_title("TH/BT (local) + real LOS cells")
     ax[0, 3].plot(th_innerZ, Z, "r-", label="TH")
     ax[0, 3].plot(bt_innerZ, Z, "b-", label="BT")
     ax[0, 3].set_xlabel(r"$\int \epsilon\, dR$ [n/m2/s]"); ax[0, 3].set_ylabel("Z [m]")
@@ -735,11 +865,20 @@ def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
     # ---- bottom row: LOS weight function & TH/BT vs rhot ----
     xs = wp["xs"]
     a = ax[1, 0]                                   # geometric LOS weight f(rhot)
-    a.plot(xs, wp["f"], "g-", lw=1.4)
+    a.plot(xs, wp["f"], "g-", lw=1.4, label="f geometric (box)")
     a.fill_between(xs, 0.0, wp["f"], color="g", alpha=0.15)
     a.set_xlim(0, 1); a.set_ylim(0, 1.05); a.grid(True, ls=":")
     a.set_xlabel("rhot"); a.set_ylabel(r"$f(\rho_t)$")
-    a.set_title("LOS weight function (geometric)")
+    a.set_title("LOS weight function")
+    if los_det is not None:                        # real-LOS detector coupling
+        fd = np.asarray(los_det["f_det"])
+        fdn = fd / np.nanmax(fd) if np.nanmax(fd) > 0 else fd
+        a.plot(xs, fdn, "m--", lw=1.4, label="f_det (real LOS, norm.)")
+        rc = los_det.get("rhot_crit")
+        if rc is not None and np.isfinite(rc):
+            a.axvline(rc, color="c", ls=":", lw=1.0,
+                      label=f"rhot_crit={rc:.3f}")
+        a.legend(fontsize=8)
 
     a = ax[1, 1]                                   # per-shell LOS rate eps*f*DVOL
     a.plot(xs, wp["shell_th"], "r-", lw=1.4, label=r"TH$\cdot f\cdot$DVOL")
@@ -760,7 +899,10 @@ def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
 
     a = ax[1, 3]                                   # cumulative TH/BT(rhot)
     a.plot(xs, wp["ratio_cum"], "c-", lw=1.6,
-           label=f"LOS-weighted (rhot=1: {wp['ratio_cum'][-1]:.3f})")
+           label=f"LOS geometric (rhot=1: {wp['ratio_cum'][-1]:.3f})")
+    if los_det is not None:                        # real-LOS C(etendue)-weighted
+        a.plot(xs, los_det["ratio_cum_det"], "m-", lw=1.8,
+               label=f"real LOS C-weighted (rhot=1: {los_det['thbt_det']:.3f})")
     a.plot(xs, wp["ratio_cum_plasma"], color="0.35", ls="--", lw=1.4,
            label=f"TRANSP full plasma (rhot=1: {wp['ratio_cum_plasma'][-1]:.3f})")
     a.set_xlim(0, 1); a.grid(True, ls=":")
