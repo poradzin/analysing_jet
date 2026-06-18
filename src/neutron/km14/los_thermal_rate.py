@@ -798,7 +798,7 @@ def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
     # padded-PCHIP interpolation used for the box grid (works on any shape).
     eps_si = thntx_on_grid(xs_sorted, thntx_sorted, rhot_c, inside_c) * thntx_to_si
 
-    sig = eps_si * C                       # per-cell detector-reaching rate
+    sig = eps_si * C      # per-cell detector-reaching rate
     rate_det = float(np.sum(sig))
     rate_chord = float(np.sum(eps_si * V))
 

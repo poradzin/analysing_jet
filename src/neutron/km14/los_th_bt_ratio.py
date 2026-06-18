@@ -913,8 +913,69 @@ def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
 
     fig.suptitle(f"{run_id} idx{idx}  KM14 LOS TH/BT  {chan_label}")
     fig.tight_layout()
+
+    # ---- second figure: effective per-shell weights vs rhot ----
+    # Left panel: each weight (f*DVOL, f_det*DVOL, DVOL) normalized to a true
+    # PDF in rhot (divided by its trapezoidal integral over [0, 1] so the area
+    # under the curve is 1) -- shows where in rhot each weight concentrates.
+    # Middle/right panels: the same three PDFs multiplied by TH and BT
+    # emissivity -- the per-shell LOS contribution under each weighting,
+    # apples-to-apples since all three weights now share the same normalisation.
+    dvol = wp["dvol_m3"]
+    fdvol = wp["f"] * dvol
+    th_si = wp["th_si"]; bt_si = wp["bt_si"]
+    def _pdf(w):
+        a_int = float(np.trapezoid(w, xs))
+        return w / a_int if a_int > 0 else w
+    dvol_pdf = _pdf(dvol)
+    fdvol_pdf = _pdf(fdvol)
+    fd_arr = np.asarray(los_det["f_det"]) if los_det is not None else None
+    fddvol_pdf = _pdf(fd_arr * dvol) if fd_arr is not None else None
+
+    fig2, ax2 = plt.subplots(1, 3, figsize=(18, 5))
+
+    a = ax2[0]
+    a.plot(xs, dvol_pdf, color="0.4", ls="-", lw=1.4, label="DVOL")
+    a.plot(xs, fdvol_pdf, "g-", lw=1.4, label=r"$f\cdot$DVOL (geom. LOS)")
+    if fddvol_pdf is not None:
+        a.plot(xs, fddvol_pdf, "m-", lw=1.4,
+               label=r"$f_{\rm det}\cdot$DVOL (real LOS)")
+        rc = los_det.get("rhot_crit")
+        if rc is not None and np.isfinite(rc):
+            a.axvline(rc, color="c", ls=":", lw=1.0,
+                      label=f"rhot_crit={rc:.3f}")
+    a.set_xlim(0, 1); a.grid(True, ls=":")
+    a.set_xlabel("rhot"); a.set_ylabel(r"PDF in rhot  ($\int_0^1 w\,d\rho_t = 1$)")
+    a.set_title("Effective per-shell weight (PDF in rhot)")
+    a.legend(fontsize=9)
+
+    for a, eps, name, color_em in [(ax2[1], th_si, "TH", "r"),
+                                   (ax2[2], bt_si, "BT", "b")]:
+        a.plot(xs, eps * dvol_pdf, color="0.4", ls="-", lw=1.4,
+               label=name + r"$\cdot$DVOL$\,/\!\int\!$DVOL$\,d\rho_t$")
+        a.plot(xs, eps * fdvol_pdf, color_em + "-", lw=1.4,
+               label=name + r"$\cdot f\cdot$DVOL$\,/\!\int\!f\cdot$DVOL$\,d\rho_t$")
+        if fddvol_pdf is not None:
+            a.plot(xs, eps * fddvol_pdf, "m-", lw=1.4,
+                   label=name + r"$\cdot f_{\rm det}\cdot$DVOL$\,/\!\int\!f_{\rm det}\cdot$DVOL$\,d\rho_t$")
+            rc = los_det.get("rhot_crit")
+            if rc is not None and np.isfinite(rc):
+                a.axvline(rc, color="c", ls=":", lw=1.0)
+        a.set_xlim(0, 1); a.grid(True, ls=":")
+        a.set_xlabel("rhot")
+        a.set_ylabel(name + r"$\,\cdot$ weight  [n/m$^3$/s]")
+        a.set_title(name + " per-shell contribution (PDF-weighted)")
+        a.legend(fontsize=8)
+
+    fig2.suptitle(f"{run_id} idx{idx}  KM14 LOS  {chan_label}  -  effective weights")
+    fig2.tight_layout()
+
     if save:
         fig.savefig(save, dpi=130); print(f"\nSaved plot to {save}")
+        import os
+        base, ext = os.path.splitext(save)
+        save_w = f"{base}_weights{ext or '.png'}"
+        fig2.savefig(save_w, dpi=130); print(f"Saved weights plot to {save_w}")
     else:
         plt.show()
 

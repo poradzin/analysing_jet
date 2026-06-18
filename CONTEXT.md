@@ -1257,6 +1257,64 @@ The local-TH/BT (R,Z) map masks near-LCFS cells where BT→0 and clips the colou
 scale to the 2–98th percentile (else edge spikes wash it to one flat colour).
 `--save <png>` also writes the weight-profile `.txt` to `src/tmp/`.
 
+## Effective-weight figure & cumulative-ratio plateau (added 2026-06-18)
+
+`make_plot` now also produces a **second figure** (1×3) with the three
+weight PDFs and their action on TH/BT. Each weight (`DVOL`, `f·DVOL`,
+`f_det·DVOL`) is normalized to a *true* PDF in rhot — divided by its
+trapezoidal integral over [0, 1] so `∫₀¹ w(ρ) dρ = 1`. The three panels:
+
+1. The three normalized weights (DVOL = grey, `f·DVOL` = green geometric
+   LOS, `f_det·DVOL` = magenta real LOS) with `rhot_crit` marked.
+2. `TH·PDF_w` for each of the three weights — per-shell TH contribution
+   under each weighting, directly comparable since all PDFs share the
+   same area-1 normalization.
+3. Same for BT.
+
+`--save` writes the figure to `<save>_weights.<ext>` next to the main PNG.
+
+**Why cumulative TH/BT is identical up to rhot ~ 0.26** (104614 M29 dd,
+observed across all three weightings). Inside `rhot_crit ≈ 0.12` the
+geometric `f` is pinned to 1 (CONTEXT lines ~242-280) and `f_det` is
+pinned to its flat plateau (lines ~520-540). For any *constant* weight
+`w₀`, the cumulative ratio reduces algebraically:
+
+    ∫₀^ρ TH·w₀·DVOL dρ' / ∫₀^ρ BT·w₀·DVOL dρ' = ∫₀^ρ TH·DVOL / ∫₀^ρ BT·DVOL
+
+i.e. the constant `w₀` cancels and all three weightings give *exactly*
+the same cumulative TH/BT inside any constant-weight region. The
+agreement extends past `rhot_crit` to ~0.26 because `f` rolls off only
+~1/r and `f_det` rises slowly with solid angle, so `w(ρ)` stays close
+enough to constant that the cumulative ratio hasn't moved measurably yet.
+
+**Why the cumulative drops 0.6 → 0.54 from ~0.26 to rhot=1 despite the
+rate falling fast.** The drop is a *relative* 10 %, which by a simple
+mass balance requires the outer contribution to BE non-negligible. Let
+`A_TH/A_BT = 0.6` be the inner totals up to ρ_split and `δTH/δBT =
+r_outer` the outer slab. Then
+
+    (A_TH + δTH)/(A_BT + δBT) = 0.54
+    => δBT / A_BT = 0.06 / (0.54 - r_outer)
+
+so for `r_outer ≈ 0.1` the outer BT yield is ~14 % of the inner total,
+for `r_outer ≈ 0.3` it's ~25 %. *Not* small. The outer BT is sizeable
+because `BTN(ρ)·DVOL(ρ)` is broader than `THNTX·DVOL` — fast-ion
+deposition is shoulder-like, not core-peaked, and the volume Jacobian
+(DVOL grows ~ρ from perimeter × shell width) fights the emissivity
+falloff. The right per-shell weight for the *ratio* is `ε·DVOL`, not
+`ε`, and `BT·DVOL` peaks well off-axis on this kind of profile. Panel 3
+of the new figure (BT × PDF) makes this visually obvious: the area
+under those curves between ρ ~ 0.26 and 1 is what drives the drop.
+
+Practical reading: the cumulative TH/BT *under any of these three
+weightings* is insensitive to LOS-weight choices wherever the weight is
+locally flat (i.e. on the enclosed core, ρ < ~0.26 here). The
+LOS-vs-full-plasma differences in the ratio show up only in the outer
+slab, weighted by `f`/`f_det` there — which is the regime in which
+choice of weighting actually matters. For ratio-only analyses on
+shells fully inside the chord, picking DVOL, `f·DVOL` or `f_det·DVOL`
+gives the same answer; pick whichever is cheapest.
+
 ## Open / next
 
 * **Run on the M29 pure-DD case** (the actual KM14 thermal-analysis run,
@@ -1628,7 +1686,7 @@ python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 --include-scatt
 python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 \
     --edep-peak 8.373 --cone-deg 4 --include-scatt --th-bt-ratio 0.58
 
-# 4. Core-only diagnostic (Nocente-style)
+# 4. Core-only diagnostic 
 python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 \
     --core-rhot 0.2 --include-scatt
 
@@ -1640,3 +1698,233 @@ python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 \
 Output PNGs get tagged with `_fit` / `_manual` / `_scatt` / `_core<R>` so the
 different runs don't overwrite each other. Saved into the same `figs/` dir as
 the input PNG.
+
+## `--los-file` — real KM14 LOS cells in the spectrum (added 2026-06-18)
+
+`km14_spectrum.py` now accepts `--los-file PATH` (e.g. `_KM3.los`), the
+same flag wired through `los_thermal_rate.py` and `los_th_bt_ratio.py`.
+When set:
+
+1. The geometric shell-fraction `f(rhot)` (rectangular-chord proxy) is
+   replaced by the **etendue-coupled** `f_det(rhot) = C_bin / DVOL` from
+   `los_thermal_rate.los_file_detector_rate`. Same anti-aliased binning,
+   enclosed-shell pinning and `rhot_crit` flattening as documented for
+   the other two scripts.
+2. The per-NUBEAM-zone BT MC cone axis switches from the point-detector
+   approximation to the file's **exact** per-cell emission versor
+   `(u, v, w)` interpolated to each zone via
+   `ltb.los_directions_for_zones`. Zones outside the LOS footprint fall
+   back to the point-detector estimate (so the option is
+   back-compatible).
+
+Both replacements feed unchanged into `thermal_spectrum` and `bt_spectrum`
+— the rest of the spectrum pipeline (Doppler-broadened Gaussian sum for
+TH, kinematic Brysk/DT MC for BT, `E_n -> E_dep` + detector-FWHM
+convolution, peak/fit/manual scaling, Scatt overlay, χ²) is unchanged.
+
+**Smoke test (104614 M29 idx 1, t_TRANSP = 12.33 s):**
+* 77 611 / 117 424 LOS cells inside LCFS; 79 / 220 NUBEAM zones in the
+  real-LOS footprint.
+* `(TH/BT)_LOS_real = 0.535` vs geometric `(TH/BT)_LOS = 0.531` — the
+  etendue weighting pulls the effective sampling toward the higher-TH/BT
+  core (consistent with the `rho_50 < rho_bnd` observation documented
+  for `los_thermal_rate.py` / `los_th_bt_ratio.py`).
+* The TH/BT spectrum shapes (E_dep peak ≈ 8.41 MeV, BT FWHM ≈ 1.17 MeV,
+  TH FWHM ≈ 0.47 MeV) are unchanged to the printed precision — the
+  detector convolution and the broad BT kinematic spread dominate over
+  the few-percent rhot-weighting reshuffle.
+
+Output PNGs gain a `_realLOS` tag (`tag += "_realLOS"`) so geometric- and
+real-LOS runs don't overwrite each other.
+
+```bash
+python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 \
+    --los-file src/neutron/km14/_KM3.los --no-plot --no-chi2
+
+python src/neutron/km14/km14_spectrum.py 104614 M29 --idx 1 \
+    --los-file src/neutron/km14/_KM3.los --th-bt-fit --include-scatt --save
+```
+
+## `--bt-aniso` — BT directional reweighting in the spectrum (added 2026-06-18)
+
+`km14_spectrum.py` also gained `--bt-aniso`, the same per-zone directional
+factor `g(zone) = (dEps/dOmega toward detector)/(Eps/4pi)` shipped in
+`los_th_bt_ratio.py`. It reuses `ltb.bt_anisotropy_factors` (so the
+in-house MC + Bosch-Hale + CM->lab + cone-acceptance machinery is
+shared) and multiplies each NUBEAM zone's `BTN1` by `g(zone)` before
+`bt_spectrum` integrates. Combined with `--los-file`, `g` is evaluated
+along the file's exact per-cell `(u, v, w)` direction (point-detector
+fallback for zones outside the LOS footprint).
+
+The km14_spectrum BT MC *already* gets the lab-frame angular spectrum
+shape right by histogramming only in-cone samples — what `--bt-aniso`
+adds is the **per-zone weight** correction (a few zones favour
+toward-detector emission, others suppress it, integrated reactivity-
+weighted). The two effects are independent.
+
+**Sensitivity summary** (104614 M29 idx 2, `--los-file --th-bt-fit
+--include-scatt --edep-peak 8.373`):
+
+| Config | (TH/BT)_TRANSP | (TH/BT)_fit | chi^2/N | RMS [cnts] | BT peak [MeV] |
+|---|---|---|---|---|---|
+| no aniso (cone 20 deg) | 0.5300 | 0.4508 | 3.55 | 13.46 | 8.43 |
+| `--bt-aniso` (cone 20 deg) | 0.5299 | 0.4506 | 3.55 | 13.45 | 8.39 |
+| `--bt-aniso --cone-deg 10` | 0.5258 | 0.4522 | 3.62 | 13.28 | 8.54 |
+| `--bt-aniso --no-rotation` | 0.5302 | 0.4477 | 3.55 | 13.49 | 8.38 |
+
+* **BT anisotropy is negligible**: `g_DT = 1.0000` (reactivity-weighted),
+  chi^2 shift < 0.1 %. KM14 vertical chord is ~perpendicular to the
+  toroidal B (angle(B, LOS) = 76-90 deg), so directional reactivity has
+  nothing to align toward. In-house MC reproduces NUBEAM 4 pi rate to
+  ~0.6 % (`vector Eps_4pi/NUBEAM = 0.994`).
+* **Cone-deg is the real lever** for the spectrum shape (not per-zone
+  `g`): 20 deg -> 10 deg shifts the BT peak +0.15 MeV (narrower cone
+  preferentially keeps neutrons with stronger CM->lab forward boost) and
+  worsens chi^2 ~2 %.
+* **Rotation matters slightly**: removing it shifts fitted TH/BT by
+  ~-0.7 %.
+
+With `--los-file` the spectrum now uses **all of `_KM3.los`**: `C`
+(etendue) -> `f_det(rhot)` shell weight; `(u, v, w)` -> per-zone BT MC
+cone axis; `(u, v, w)` -> directional `g(zone)` under `--bt-aniso`;
+`V, R, Z` (cell positions) -> `f_det` binning. The `_aniso` filename tag
+on auto-saved PNGs keeps the four combinations (no-flag / `--los-file`
+/ `--bt-aniso` / both) from overwriting each other.
+
+### `--cone-deg` is an MC averaging window, not a physical detector cone
+
+A natural question once `--los-file` is in: can the *cone half-angle*
+also be inferred from the file? **No** -- `cone-deg` stays a free CLI
+parameter, because it serves a purely numerical role.
+
+* The LOS file specifies the *direction* `n_LOS = (u, v, w)` per cell
+  exactly, and the *per-cell etendue* `C` gives the true detector solid
+  angle `Omega = 4 pi C / V` ~ `1e-3 sr` ~ **~1 deg half-angle**. That
+  is the *physical* cone any one cell subtends.
+* The MC samples isotropic CM directions per (fast-ion, thermal) pair
+  and keeps only neutrons whose lab direction falls within `cone-deg`
+  of `n_LOS`. Using the physical `~1 deg` cone would accept ~3e-5 of
+  the samples -- with `nsamp = 60000` per zone that's ~2 in-cone
+  neutrons, pure noise. So `cone-deg` has to be a *wider* sampling
+  window than the physics, sized for MC statistics.
+* The acceptable looseness comes from the lab-frame BT spectrum being
+  **smooth in angle near the LOS**. Averaging across a small cone gives
+  nearly the same shape as the true point direction. For KM14
+  (vertical chord ~perpendicular to the toroidal B), this smoothness is
+  generous; the 104614 M29 idx 2 sensitivity scan showed the spectrum
+  barely moves over `cone-deg` up to ~30 deg (`20 -> 10 deg` shifts the
+  BT peak +0.15 MeV and chi^2 +2 %, the residual bias of cone tightening
+  trading off against the kinematic CM->lab forward-boost selection).
+
+Geometry inputs vs `cone-deg`:
+
+| Quantity                   | Source                       | Role                             |
+|----------------------------|------------------------------|----------------------------------|
+| `n_LOS` per zone           | `(u,v,w)` from `_KM3.los`    | center of MC cone (exact)        |
+| per-cell etendue `C`       | `_KM3.los`                   | shell weight `f_det = C_bin/DVOL`|
+| MC angular window `cone-deg` | CLI flag                   | **numerical**, not physical      |
+
+**Future improvement (not today).** The hard cone cut wastes the
+out-of-cone MC samples and produces this residual `cone-deg` bias. A
+cleaner version would weight every sample by an angular kernel (e.g.
+Gaussian in `arccos(n_hat . n_LOS)` with a width chosen for
+bias-variance trade-off) so all samples contribute, the spectrum
+relaxes toward the true `cone-deg -> 0` limit, and the knob disappears.
+Worth it if a future analysis needs cone-deg-insensitive BT spectra; not
+worth it now since the current effect is ~2 % on chi^2.
+
+## BT peak position vs Nocente on M13 (open issue, 2026-06-18)
+
+Running the spectrum on 104614 **M13** idx 2 with the published
+peak-alignment (`--edep-peak 8.373 --th-bt-ratio 0.62 --include-scatt
+--los-file _KM3.los --bt-aniso`): the **TH component reproduces
+Nocente's TH almost exactly**, but the **BT component sits ~30-50 keV
+high** in `E_dep`, dragging the total (black curve) above Nocente's
+total (red). Both calculations use the same M13 NUBEAM run as input, so
+the discrepancy is in the forward model, not the data. M13 has only
+`BTN1` (DT) and `BTN4` (DD) -- no `BTN7` / `BTN5` -- so it is **not**
+a missing-channel issue; our `bt_spectrum` uses exactly the BT-DT
+component that contributes at 14 MeV.
+
+### Leading hypothesis: asymmetric diamond detector response
+
+We convolve every neutron spectrum with a **symmetric Gaussian** of
+fixed FWHM (`--det-fwhm`, default 0.20 MeV). Real diamond response to
+14 MeV neutrons is **asymmetric**: a sharp upper edge at
+`E_dep = E_n + Q` (Q = -5.701 MeV, 12C(n,alpha0)9Be) plus a low-energy
+tail from partial charge collection, neutron escape, and inelastic
+channels (`12C(n,alpha1)`, `(n,n')3alpha`). When the input is broad
+(BT FWHM ~ 1.2 MeV) and you convolve with an asymmetric kernel that
+has a low-E tail, the **peak shifts toward lower E_dep** more for
+broader inputs than for narrow ones:
+
+* TH (Doppler FWHM ~ 180 keV) -- peak barely moves, dominated by the
+  response shape itself.
+* BT (~ 1.2 MeV) -- peak pulled noticeably down by the tail.
+
+So a realistic response pulls BT toward TH; our symmetric Gaussian
+leaves BT at the kinematic position. That is the exact sign of the
+discrepancy observed. Nocente almost certainly uses a tabulated
+response function (likely MCNP-derived or measured), not a Gaussian.
+
+**Empirical confirmation that wider Gaussian doesn't fix it.** Running
+with `--det-fwhm 0.4` (double the default) broadens everything but does
+**not** appreciably shift the BT peak position. This is expected: a
+*symmetric* convolution leaves the peak position unchanged regardless
+of width. The shift requires *asymmetry* in the response. So adding a
+proper response is the only real fix; widening the FWHM is not.
+
+### Other factors with smaller likely impact
+
+Listed roughly in order of expected magnitude:
+
+1. **DT thermal birth energy `E0_DT`.** We use 14.03 MeV (default); the
+   2-body rest-frame value is 14.04 MeV (`Q * m_alpha/(m_alpha + m_n)
+   = 17.589 * 0.7986`). ~10 keV; trivial.
+2. **CM-frame angular distribution.** `btk.isotropic_cm` samples
+   uniformly in `cos theta_CM`. Real DT has ~5-10 % anisotropy at
+   `E_cm ~ 100 keV`. For KM14 (LOS perp. to v_CM toroidal direction),
+   this mostly affects BT *width*, not peak.
+3. **Plasma rotation on fast ions.** `bt_los_emissivity.fast_velocity_vectors`
+   does NOT add `v_rot` to the fast ion (only to the thermal target).
+   Whether `F_D_NBI` is in lab or plasma-rotating frame is a NUBEAM
+   convention question; if rotating, we miss the rotation contribution
+   to `v_CM`. For KM14 the toroidal projection on the vertical LOS is
+   ~0, so the linear effect cancels; only second-order corrections
+   survive.
+4. **F_D_NBI normalization.** `--fast-norm bdens` (default) is the
+   recommended setting (matches `BDENS_D`). `ntot` would change
+   fast-ion density by ~30 % in places and slightly tilt the
+   energy-averaged boost.
+5. **LOS direction within zones.** `los_directions_for_zones`
+   griddata-interpolates the cell `(u, v, w)` field onto each NUBEAM
+   zone -- a single direction per zone. Real cells span a small
+   angular range within each zone (`w ~ 0.9997`, tilt < 1.4 deg), so
+   using one direction per zone slightly biases the kinematic
+   projection.
+6. **Non-relativistic kinematics.** `btk.neutron_lab_velocity` is
+   non-relativistic. For 14 MeV neutrons `v/c ~ 0.17`, so relativistic
+   corrections to `E_lab` are ~1.5 %; for KM14's perpendicular
+   geometry the projection on LOS is much smaller.
+
+### Path to a proper fix (future)
+
+The fix is to replace the Gaussian convolution with a **tabulated
+response function**:
+
+* Input: `R(E_dep | E_n)` -- a 2-D matrix (or `E_n`-dependent line
+  shape) giving the probability density of `E_dep` for a monoenergetic
+  `E_n` neutron in a diamond.
+* Source candidates: MCNP simulation of the KM14 diamond geometry, a
+  published parameterisation (Nocente or KM14 instrument paper), or
+  measurement against a calibration source.
+* Apply by convolving sample-by-sample (or zone-by-zone): rather than
+  one global convolution of the total `(TH+BT)_n` spectrum, fold each
+  shell's contribution with `R(E_dep | E_n)` so that BT, which spans a
+  broader `E_n`, samples the response asymmetry differently from TH.
+
+This is a discrete, scoped task -- worth doing the next time the BT
+peak position becomes the limiting source of model-data disagreement.
+For now `--det-fwhm` stays the only handle; document the BT shift as a
+known forward-model limit and report TH/BT *ratios* (which are less
+sensitive to peak position) rather than absolute peak alignments.

@@ -31,6 +31,16 @@ CLI
 ---
     python km14_spectrum.py 104614 M29 --idx 1 --save
     python km14_spectrum.py 104614 M29 --idx 1 --det-fwhm 0.2 --nsamp 60000
+    python km14_spectrum.py 104614 M29 --idx 1 \
+           --los-file src/neutron/km14/_KM3.los   # use the real KM14 LOS cell file
+
+``--los-file PATH`` replaces the idealised geometric LOS weight ``f(rhot)`` (the
+shell-fraction of the rectangular chord box) by the real detector-coupling
+``f_det(rhot) = C_bin / DVOL`` derived from M. Nocente's ``_KM3.los`` cell
+cloud (etendue-weighted; see los_thermal_rate.py). The same per-zone
+detector-direction versor from the file (``(u, v, w)``) is also used for the BT
+MC cone instead of the point-detector approximation; zones outside the LOS
+footprint fall back to the point-detector estimate.
 """
 
 from __future__ import annotations
@@ -70,6 +80,36 @@ PNG_YLIM = (0.0, 200.0)
 # ----------------------------------------------------------------------
 # LOS weight f(rhot) on the TRANSP X grid (shared by TH and BT)
 # ----------------------------------------------------------------------
+
+def los_weight_real_on_x(eq, cdf_path, args):
+    """Real-LOS detector-coupling weight ``f_det(rhot)`` on the TRANSP X grid.
+
+    Reads the KM14 cell cloud (``args.los_file``), builds an ``EqCDF`` (the
+    griddata+pinned-axis/LCFS rhot mapper used by ``los_thermal_rate``) and
+    delegates to ``los_file_detector_rate`` for the same anti-aliased
+    enclosed-shell-pinned ``f_det`` shipped to ``los_th_bt_ratio.py``. The TH
+    flux profile is passed in only to satisfy the signature -- ``f_det`` is
+    emissivity-independent (purely geometric+etendue).
+
+    Returns ``(xs, f_det, dvol_cm3, n_inside_cells, fres)``.
+    """
+    from los_thermal_rate import EqCDF, los_file_detector_rate, read_los_file
+    with Dataset(str(cdf_path), "r") as d:
+        X = np.array(d["X"][eq.tind])
+        dvol_cm3 = np.array(d["DVOL"][eq.tind])
+        thntx_dt = np.array(d["THNTX_DT"][eq.tind])
+    order = np.argsort(X)
+    xs = X[order]
+    dvol_cm3 = dvol_cm3[order]
+    thntx_dt = thntx_dt[order]
+    cells = read_los_file(args.los_file)
+    # EqCDF wants the JET time; TRANSP TIME3 and JET PPF differ by ~40 s on
+    # 104614 -- same offset used in los_th_bt_ratio with --los-file.
+    eqcdf = EqCDF(str(cdf_path), eq.t_used + 40.0)
+    fres = los_file_detector_rate(cells, eqcdf, xs, thntx_dt, 1.0e6,
+                                  dvol_cm3 * 1.0e-6)
+    return xs, fres["f_det"], dvol_cm3, int(np.sum(fres["inside_cells"])), fres
+
 
 def los_weight_on_x(eq, cdf_path, fi_path, args):
     """Geometric LOS shell fraction f(rhot) on the sorted TRANSP X grid.
@@ -131,9 +171,14 @@ def thermal_spectrum(xs, f, dvol_cm3, cdf_path, tind, En_keV, e0_mev):
 # Beam-thermal-DT neutron spectrum (kinematic, LOS- + detector-direction)
 # ----------------------------------------------------------------------
 
-def bt_spectrum(fi, neut_dt, cdf_path, xs, f, En_keV, det_R, det_Z, args, rng):
+def bt_spectrum(fi, neut_dt, cdf_path, xs, f, En_keV, det_R, det_Z, args, rng,
+                n_los_override=None):
     """Per-zone MC lab-energy spectrum of BT-DT neutrons into the KM14 cone,
     each zone scaled by its LOS-seen rate BTN1*f*BMVOL.
+
+    ``n_los_override`` (optional ``(n_zone, 3)`` array in the (R, phi, Z) basis)
+    replaces the point-detector cone axis with a per-zone direction (e.g. from
+    the real LOS cell file). Rows with NaN keep the point-detector estimate.
 
     Returns (spectrum [n/s/keV] on En_keV, total LOS rate [n/s])."""
     therm = bzi.read_thermal_profiles(cdf_path, fi["time"], fi["x2d"])
@@ -159,6 +204,10 @@ def bt_spectrum(fi, neut_dt, cdf_path, xs, f, En_keV, det_R, det_Z, args, rng):
     dZ = det_Z - Zz
     nrm = np.sqrt(dR * dR + dZ * dZ)
     n_los = np.column_stack([dR / nrm, np.zeros_like(dR), dZ / nrm])
+    if n_los_override is not None:
+        ovr = np.asarray(n_los_override, float)
+        valid = np.all(np.isfinite(ovr), axis=1)
+        n_los = np.where(valid[:, None], ovr, n_los)
     cos_alpha = np.cos(np.radians(args.cone_deg))
 
     # per-zone LOS-seen rate weight: BTN1 [1/cm3/s] * f(rhot_zone) * BMVOL [cm3]
@@ -410,6 +459,19 @@ def main(argv=None):
                    help="text file with columns (E_dep_MeV, counts) for the "
                         "Scatt component; default ~/jet/data/<pulse>/figs/"
                         "<pulse>_KM14_scatt.txt (produced by extract_km14_png.py)")
+    p.add_argument("--los-file", default=None,
+                   help="real KM14 LOS cell file (_KM3.los). When given, the "
+                        "geometric shell-fraction f(rhot) is replaced by the "
+                        "etendue-coupled f_det(rhot) from los_thermal_rate and "
+                        "the per-zone BT MC cone axis by the file's (u,v,w) "
+                        "versor (point-detector fallback for zones outside the "
+                        "LOS footprint).")
+    p.add_argument("--bt-aniso", action="store_true",
+                   help="reweight each NUBEAM zone's BT rate by the directional "
+                        "factor g(zone) = (dEps/dOmega toward detector)/(Eps/4pi) "
+                        "(computed by reusing los_th_bt_ratio.bt_anisotropy_factors). "
+                        "Combine with --los-file to use the exact per-cell (u,v,w) "
+                        "LOS direction inside g.")
     p.add_argument("--png", default=PNG_DEFAULT)
     p.add_argument("--save", nargs="?", const="__auto__", default=None,
                    help="save the overlay PNG (optional path; default into figs/)")
@@ -445,9 +507,18 @@ def main(argv=None):
     print(f"Run dir : {run_dir}")
     print(f"FBM idx : {idx}   t_TRANSP = {fi['time']:.4f} s   (slice {eq.tind})")
 
-    # LOS weight f(rhot)
-    xs, f, dvol_cm3, n_in = los_weight_on_x(eq, cdf_path, fi_path, args)
-    print(f"LOS     : {n_in} chord pts inside LCFS,  max f = {f.max():.3f}")
+    # LOS weight f(rhot): geometric (default) or real-LOS f_det if --los-file.
+    # Both arrive on the sorted TRANSP X grid and are used identically downstream.
+    if args.los_file:
+        xs, f, dvol_cm3, n_in_cells, _fres = los_weight_real_on_x(
+            eq, cdf_path, args)
+        print(f"REAL LOS: {args.los_file}  ({n_in_cells} cells inside LCFS, "
+              f"max f_det = {f.max():.3e})")
+        weight_mode = "LOS_real"
+    else:
+        xs, f, dvol_cm3, n_in = los_weight_on_x(eq, cdf_path, fi_path, args)
+        print(f"LOS     : {n_in} chord pts inside LCFS,  max f = {f.max():.3f}")
+        weight_mode = "LOS"
     if args.core_rhot is not None:
         f_core = (xs <= args.core_rhot).astype(float)
         n_shells = int(f_core.sum())
@@ -455,8 +526,6 @@ def main(argv=None):
               f"-> {n_shells} of {xs.size} TRANSP shells kept (core diagnostic)")
         f = f_core
         weight_mode = f"CORE rhot<{args.core_rhot:.2f}"
-    else:
-        weight_mode = "LOS"
 
     # energy grid
     En = np.arange(11.5e3, 16.5e3 + args.de_kev, args.de_kev)   # keV
@@ -467,8 +536,50 @@ def main(argv=None):
                                         args.e0_dt)
     rng = np.random.default_rng(args.seed)
     det_Z = eq.Zmag + args.detector_height
-    bt_spec, bt_rate = bt_spectrum(fi, neut["DT"], cdf_path, xs, f, En,
-                                   args.detector_R, det_Z, args, rng)
+    # With --los-file, replace the point-detector cone axis by the file's
+    # exact per-cell emission versor interpolated to each NUBEAM zone (zones
+    # outside the footprint fall back to the point-detector estimate, matching
+    # los_th_bt_ratio.py).
+    n_los_override = None
+    if args.los_file:
+        Rz_m = fi["r2d"] / 100.0
+        Zz_m = fi["z2d"] / 100.0
+        n_real, valid = ltb.los_directions_for_zones(args.los_file, Rz_m, Zz_m)
+        if valid.any():
+            n_los_override = np.where(valid[:, None], n_real, np.nan)
+            print(f"BT cone : real LOS direction from file "
+                  f"({int(valid.sum())}/{int(valid.size)} zones in footprint)")
+
+    # Optional BT directional reweighting: multiply each zone's NUBEAM BT rate
+    # by g(zone) = (dEps/dOmega toward detector) / (Eps/4pi), computed by
+    # reusing los_th_bt_ratio.bt_anisotropy_factors. The 4*pi magnitude stays
+    # NUBEAM's validated BTN1; only the dimensionless g is taken from the MC.
+    # Combine with --los-file to fold in the exact per-cell LOS direction.
+    neut_dt_eff = neut["DT"]
+    if args.bt_aniso:
+        fi["_neut_ref"] = neut
+        g_map, aniso = ltb.bt_anisotropy_factors(
+            fi, cdf_path, ["DT"], args.detector_R, det_Z, args)
+        g_dt = g_map["DT"]
+        neut_dt_eff = neut["DT"] * g_dt
+        amn, amed, amx = aniso["ang_bL"]
+        if aniso.get("los"):
+            li = aniso["los"]
+            print(f"BT aniso: LOS from {args.los_file} "
+                  f"({li['n_used']}/{li['n_zone']} zones in footprint; "
+                  f"vs point-detector med/max "
+                  f"{li['dang_med']:.1f}/{li['dang_max']:.1f} deg)")
+        else:
+            print(f"BT aniso: detector (R,Z)=({aniso['det_R']:.2f},"
+                  f"{aniso['det_Z']:.2f}) m (point detector)")
+        cons = aniso["consistency"].get("DT")
+        cons_s = f"  [vector Eps_4pi/NUBEAM={cons:.3f}]" if cons else ""
+        print(f"        reactivity-wtd g_DT = {aniso['gbar']['DT']:.4f}{cons_s}; "
+              f"angle(B,LOS) min/med/max {amn:.0f}/{amed:.0f}/{amx:.0f} deg "
+              f"(nsamp={args.nsamp}, cone={args.cone_deg:g} deg)")
+    bt_spec, bt_rate = bt_spectrum(fi, neut_dt_eff, cdf_path, xs, f, En,
+                                   args.detector_R, det_Z, args, rng,
+                                   n_los_override=n_los_override)
 
     # E_n -> E_dep and detector-resolution convolution
     edep = En / 1000.0 + shift_mev                              # MeV
@@ -617,6 +728,10 @@ def main(argv=None):
     tag = {"FIT": "_fit", "MANUAL": "_manual"}.get(split_mode, "")
     if args.include_scatt:
         tag += "_scatt"
+    if args.los_file:
+        tag += "_realLOS"
+    if args.bt_aniso:
+        tag += "_aniso"
     if args.core_rhot is not None:
         tag += f"_core{args.core_rhot:.2f}".replace(".", "p")
     if save == "__auto__":
@@ -629,8 +744,12 @@ def main(argv=None):
         mode_label = f"[manual: TH/BT = {args.th_bt_ratio:.3f}, peak->{args.peak_counts:.0f}]"
     else:
         mode_label = f"[TRANSP: TH/BT = {th_bt_transp:.3f}, peak->{args.peak_counts:.0f}]"
-    weight_label = (f"rho<{args.core_rhot:.2f}"
-                    if args.core_rhot is not None else "LOS")
+    if args.core_rhot is not None:
+        weight_label = f"rho<{args.core_rhot:.2f}"
+    elif args.los_file:
+        weight_label = "real LOS"
+    else:
+        weight_label = "LOS"
     make_overlay(edep, th_n, bt_n, tot_n, args.png, save, args.peak_counts,
                  run_id, idx, t_lbl, args, mode_label=mode_label,
                  scatt=scatt_n if args.include_scatt else None,
