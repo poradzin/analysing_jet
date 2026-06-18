@@ -88,12 +88,28 @@ Flags: --idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone}
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import numpy as np
 from netCDF4 import Dataset
 from matplotlib.path import Path as MplPath
 from scipy.interpolate import PchipInterpolator, griddata
+
+# Shared LOS / equilibrium / binning library lives in src/neutron/common/.
+_COMMON_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../common"))
+if _COMMON_DIR not in sys.path:
+    sys.path.insert(0, _COMMON_DIR)
+
+from los_common import (
+    find_run_dir,
+    CdfEquilibrium,
+    EqCDF,
+    read_los_file,
+    los_shell_fraction,
+    los_file_detector_rate,
+)
 
 import bt_zone_integrator as bzi
 
@@ -119,89 +135,9 @@ CHANNELS = {
 }
 
 
-# ----------------------------------------------------------------------
-# Equilibrium from the TRANSP CDF (psi(R,Z) -> rhot), no ppf
-# ----------------------------------------------------------------------
-
-class CdfEquilibrium:
-    """rhot(R, Z) from the TRANSP main CDF at a chosen time."""
-
-    def __init__(self, cdf_path, time):
-        with Dataset(cdf_path, "r") as d:
-            t3 = np.array(d["TIME3"][:])
-            ti = int(np.argmin(np.abs(t3 - time)))
-            self.tind = ti
-            self.t_used = float(t3[ti])
-            self.RG = np.array(d["RGRID"][ti]) / 100.0      # m
-            self.ZG = np.array(d["ZGRID"][ti]) / 100.0
-            nR, nZ = len(self.RG), len(self.ZG)
-            psi = np.array(d["PSIRZ"][ti]).reshape(nZ, nR)  # [iz, ir] Wb/rad
-            psi0 = float(d["PSI0_TR"][ti])
-            psibnd = float(d["PLFLXA"][ti])
-            XB = np.array(d["XB"][ti])                       # rhot boundaries
-            PLFLX = np.array(d["PLFLX"][ti])                 # poloidal flux on XB
-            self.Rmag = float(d["RAXIS"][ti]) / 100.0        # magnetic axis [m]
-            self.Zmag = float(d["YAXIS"][ti]) / 100.0
-        self.psin = (psi - psi0) / (psibnd - psi0)           # normalized psi(R,Z)
-        # rhot(psi_n): psi_n on the XB grid is monotonic 0->1; XB is rhot
-        psin_b = (PLFLX - PLFLX[0]) / (PLFLX[-1] - PLFLX[0])
-        self._psin_b = psin_b
-        self._rhot_b = XB
-
-    def rhot(self, R, Z):
-        """Bilinear psi_n at (R, Z) [m] -> rhot (sqrt tor flux). Clipped [0,1].
-
-        NB: bilinear floors psi_n at the coarse PSIRZ axis node (~3e-4 -> rhot
-        ~0.02), which zeroes the innermost LOS flux shells. Use ``rhot_pinned``
-        for the chord grid; this plain version is kept for ad-hoc point lookups.
-        """
-        RG, ZG = self.RG, self.ZG
-        ir = np.clip(np.searchsorted(RG, R) - 1, 0, len(RG) - 2)
-        iz = np.clip(np.searchsorted(ZG, Z) - 1, 0, len(ZG) - 2)
-        tr = (R - RG[ir]) / (RG[ir + 1] - RG[ir])
-        tz = (Z - ZG[iz]) / (ZG[iz + 1] - ZG[iz])
-        P = self.psin
-        pn = (P[iz, ir] * (1 - tr) * (1 - tz) + P[iz, ir + 1] * tr * (1 - tz)
-              + P[iz + 1, ir] * (1 - tr) * tz + P[iz + 1, ir + 1] * tr * tz)
-        pn = np.clip(pn, 0.0, 1.0)
-        return np.clip(np.interp(pn, self._psin_b, self._rhot_b), 0.0, 1.0)
-
-    def rhot_pinned(self, R, Z, Rb=None, Zb=None):
-        """rhot at (R, Z) [m] via cubic griddata of psi_n with the magnetic axis
-        pinned at psi_n = 0 and (when ``Rb``/``Zb`` given) the LCFS at psi_n = 1.
-
-        Bilinear interpolation of the coarse PSIRZ grid (dR ~ 2 cm) cannot reach
-        the true axis minimum (psi is paraboloidal with its vertex between
-        nodes), flooring psi_n at ~3e-4, i.e. rhot ~ 0.02 -- so the innermost
-        f(rhot) bins get no LOS volume. Injecting the axis as a scattered node
-        removes the floor. Symmetrically, the cubic fit also floors *short* of
-        psi_n = 1 inside the LCFS (max ~0.999), starving the outermost f(rhot)
-        bins so the weight craters near rhot = 1; passing the LCFS polygon
-        (``Rb``, ``Zb`` [m], the same one used for the inside mask) pins it at
-        psi_n = 1 and removes that crater. Mirrors
-        ``los_thermal_rate.EqCDF.rhot_on_grid``.
-        """
-        from scipy.interpolate import griddata
-        Rg_n, Zg_n = np.meshgrid(self.RG, self.ZG)  # (nZ, nR), matches psin[iz,ir]
-        pin_R = [self.Rmag]
-        pin_Z = [self.Zmag]
-        pin_psin = [0.0]
-        if Rb is not None and Zb is not None:
-            Rb = np.asarray(Rb).ravel()
-            Zb = np.asarray(Zb).ravel()
-            pin_R = np.concatenate([pin_R, Rb])
-            pin_Z = np.concatenate([pin_Z, Zb])
-            pin_psin = np.concatenate([pin_psin, np.ones(Rb.size)])
-        pts_R = np.concatenate([Rg_n.ravel(), pin_R])
-        pts_Z = np.concatenate([Zg_n.ravel(), pin_Z])
-        pts_psin = np.concatenate([self.psin.ravel(), pin_psin])
-        query = np.column_stack([np.asarray(R).ravel(), np.asarray(Z).ravel()])
-        pd = griddata((pts_R, pts_Z), pts_psin, query, method="cubic")
-        if np.any(np.isnan(pd)):
-            pl = griddata((pts_R, pts_Z), pts_psin, query, method="linear")
-            pd = np.where(np.isnan(pd), pl, pd)
-        pc = np.clip(np.where(np.isnan(pd), 1.0, pd), 0.0, 1.0)
-        return np.clip(np.interp(pc, self._psin_b, self._rhot_b), 0.0, 1.0)
+# (Equilibrium class CdfEquilibrium [rhot(R, Z) from the TRANSP CDF, with
+#  bilinear ``rhot`` and pinned-axis ``rhot_pinned``] migrated to
+#  src/neutron/common/los_common.py; imported above.)
 
 
 def read_lcfs(fi_path):
@@ -262,7 +198,6 @@ def los_directions_for_zones(los_path, Rz, Zz, max_cells=30000, seed=0):
     (NaN rows where invalid) and ``valid`` is the boolean in-footprint mask; the
     caller falls back to the point-detector direction for invalid zones.
     """
-    from los_thermal_rate import read_los_file
     cells = read_los_file(los_path)
     Rc, Zc = cells["R"], cells["Z"]
     u, v, w = cells["u"], cells["v"], cells["w"]
@@ -482,7 +417,6 @@ def rhot_weight_profiles(eq, rhot, inside, R, Z, x_th, th_prof, x_bt, bt_prof,
                         (-> whole-plasma 0D TH/BT at rhot=1)
       sum_th, sum_bt      total per-shell LOS rate (= cum[-1])
     """
-    from los_thermal_rate import los_shell_fraction  # lazy: avoids import cycle
     with Dataset(str(cdf_path), "r") as d:
         dvol = np.array(d["DVOL"][eq.tind]) * 1.0e-6   # CM**3 -> m^3
 
@@ -575,7 +509,7 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     run_id = f"{args.pulse}{args.run_suffix}"
-    run_dir = bzi.find_run_dir(args.pulse, args.run_suffix, args.data_dir)
+    run_dir = find_run_dir(args.pulse, args.run_suffix, args.data_dir)
     idxs = bzi.list_fbm_indices(run_dir, run_id)
     if not idxs:
         print(f"No {run_id}_fi_*.cdf in {run_dir}", file=sys.stderr)
@@ -747,8 +681,6 @@ def main(argv=None):
     # TH/BT, alongside the geometric-LOS and full-plasma cumulatives.
     los_det = None
     if args.los_file:
-        from los_thermal_rate import (EqCDF, los_file_detector_rate,
-                                       read_los_file)
         eqcdf = EqCDF(cdf_path, fi["time"] + 40.0)   # EqCDF wants JET time
         cells_los = read_los_file(args.los_file)
         fres = los_file_detector_rate(

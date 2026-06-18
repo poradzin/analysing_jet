@@ -60,6 +60,7 @@ Flags: --idx --data-dir --nsamp --seed --plot --save --no-plot
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -68,27 +69,14 @@ from netCDF4 import Dataset
 
 import bt_kinematics as btk
 
-DEFAULT_LOCAL_BASE = Path.home() / "jet" / "data"
-HEIMDALL_BASE = Path("/common/transp_shared/Data/result/JET")
-
-
-# ----------------------------------------------------------------------
-# I/O  (mirrors bt_poloidal_distribution.py conventions)
-# ----------------------------------------------------------------------
-
-def find_run_dir(pulse, run_suffix, data_dir=None):
-    candidates = []
-    if data_dir is not None:
-        candidates.append(Path(data_dir) / str(pulse) / run_suffix)
-    candidates.append(DEFAULT_LOCAL_BASE / str(pulse) / run_suffix)
-    candidates.append(HEIMDALL_BASE / str(pulse) / run_suffix)
-    for c in candidates:
-        if c.is_dir():
-            return c
-    raise FileNotFoundError(
-        f"No TRANSP run directory found for {pulse}{run_suffix}. "
-        f"Tried: {[str(c) for c in candidates]}"
-    )
+# find_run_dir + data-tree base paths live in src/neutron/common/los_common.py;
+# re-export so bt_zone_integrator.find_run_dir keeps working for any caller
+# that still uses ``import bt_zone_integrator as bzi; bzi.find_run_dir(...)``.
+_COMMON_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "../common"))
+if _COMMON_DIR not in sys.path:
+    sys.path.insert(0, _COMMON_DIR)
+from los_common import find_run_dir, DEFAULT_LOCAL_BASE, HEIMDALL_BASE  # noqa: F401
 
 
 def list_fbm_indices(run_dir, run_id):

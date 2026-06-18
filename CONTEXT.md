@@ -1928,3 +1928,214 @@ peak position becomes the limiting source of model-data disagreement.
 For now `--det-fwhm` stays the only handle; document the BT shift as a
 known forward-model limit and report TH/BT *ratios* (which are less
 sensitive to peak position) rather than absolute peak alignments.
+
+---
+
+# Shared LOS library `src/neutron/common/los_common.py` (added 2026-06-18)
+
+Motivation: a new neutron diagnostic — **KM9 (MPRu)** — is being added.
+M. Nocente supplied `src/neutron/km9/KM9.los` (329 696 cells) using the
+same Genesis 8-column cell format as `_KM3.los` (`KM9_LoS_readme.txt`).
+**KM9 is *horizontal* and crosses the vessel twice** — the file's `x`
+range is [-3.94, 3.85] m (toroidal dominant), `y` in [1.70, 2.27] m,
+`z` in [-0.07, 1.34] m, versor `u≈0.99` — fundamentally different from
+KM14's near-vertical pencil chord (`|x|≤0.098`, `w≈1.0`). The
+"simplified box" (vertical chord, fixed `R∈[Rmin,Rmax]`, full Z extent,
+`w_tor=0.4 m`) that frames the KM14 pipeline is physically meaningful
+only for that chord; for KM9 it has no analogue. The *real-cell*
+detector-rate path (`los_file_detector_rate`), however, is
+geometry-agnostic and should be shared. Hence: factor the shared code,
+keep two thin scripts (one per diagnostic).
+
+## What moved into `los_common.py`
+
+One module hosts every symbol used by more than one LOS script (the
+directory `src/neutron/common/` is the unit of organisation; we will
+add more modules there as scripts are built):
+
+* **I/O.** `find_run_dir` (was `bt_zone_integrator.find_run_dir`),
+  `read_time_grid`, `read_thermal_slice`, `read_los_file`.
+* **Equilibrium.** `_boundary_from_moments`, `_rhot_scatter`,
+  `_lcfs_contour`; the low-level `CdfEquilibrium` (was duplicated in
+  `los_th_bt_ratio.py` — the canonical version is the one with the
+  pinned-axis-+-LCFS `rhot_pinned`); the high-level `EqCDF` (wraps
+  `CdfEquilibrium`) and `EqPPF`.
+* **Numerics.** `thntx_on_grid`, `find_rho_bnd`, `_subgrid_bin`
+  (overlap- and DVOL-density-weighted), `_running_median3`.
+* **LOS rates.** `los_shell_fraction` (box-chord `f(rhot)` with the
+  enclosed-shell `f=1` pin gated by `rmag`), `los_file_detector_rate`
+  (real-cell `f_det(rhot)`, `Rate_det`, `rho_50`).
+
+What stays in `km14/los_thermal_rate.py` (~840 lines, down from 1395):
+the box-chord pipeline `build_rz_grid` / `integrate_rate` /
+`toroidal_rate`, the A/B/C decomposition, the 2x3 diagnostic plot, the
+CLI, channel constants, and KM14-specific defaults
+(`R_MIN/MAX_DEFAULT=2.60/3.16`, `W_TOR_DEFAULT=0.4`).
+
+## `chord_kind` kwarg on `los_file_detector_rate`
+
+The only KM14-specific assumption in `los_file_detector_rate` is the
+`rhot_crit` construction at the end of the subgrid block: it takes
+the innermost flux surface that reaches the R-boundaries of the
+structured rhot grid as the radius inside which the chord encloses
+whole flux surfaces. That encodes "vertical pencil chord with axis
+inside the R-band". For a horizontal chord like KM9 there is no
+analogous "enclosed shell" — the chord doesn't fully sweep any flux
+surface. So `los_file_detector_rate` now takes
+`chord_kind: "vertical"|"horizontal"|"auto"`:
+
+* `"vertical"` (**default**, preserves KM14 numbers byte-for-byte) —
+  compute `rhot_crit`, apply enclosed-shell flattening, apply outside
+  3-bin median.
+* `"horizontal"` — skip all three; `rhot_crit` returned as `None`,
+  `f_det` is the raw DVOL-weighted-subgrid binning, no cosmetic
+  median3.
+* `"auto"` — infer from `median(|cells["w"]|)` (vertical if > 0.9,
+  else horizontal). KM14 cells (`w≈1.0`) → vertical; KM9 cells
+  (`w≈0.05`) → horizontal. Same default produces the expected
+  behaviour for each.
+
+## How callers were threaded onto the lib
+
+* `km14/los_thermal_rate.py`: `sys.path.insert(0, ../common)` at the
+  top, then `from los_common import …`. All migrated function
+  *bodies* removed; only box pipeline + plots + CLI remain. The script
+  default `chord_kind` is unchanged (`"vertical"`).
+* `km14/los_th_bt_ratio.py`: dropped its duplicated `CdfEquilibrium`,
+  dropped the three lazy `from los_thermal_rate import …` clauses
+  (cycle-break trick is no longer needed), pulls
+  `CdfEquilibrium / EqCDF / read_los_file / los_shell_fraction /
+  los_file_detector_rate / find_run_dir` from `los_common`. `bzi`
+  import kept — it still uses `bzi.read_thermal_profiles /
+  fast_ion_density / list_fbm_indices / read_fi_distribution /
+  read_neut_rates / sample_fast_speeds / renormalize_to_bdens`.
+* `km14/bt_zone_integrator.py`: its own `find_run_dir` body deleted,
+  replaced with `from los_common import find_run_dir, DEFAULT_LOCAL_BASE,
+  HEIMDALL_BASE`. The re-export keeps `bzi.find_run_dir(...)` working
+  unchanged for **all** other callers — `bt_los_emissivity.py` and
+  `km14_spectrum.py` still call `bzi.find_run_dir` and need no edit.
+
+Files **intentionally not touched** (no breakage; clean up
+opportunistically): `km14_spectrum.py` and `bt_los_emissivity.py`
+still use `bzi.find_run_dir` (works via the re-export);
+`bt_poloidal_distribution.py` still carries its own duplicate
+`find_run_dir` — independent of the shared lib, also unchanged.
+
+## Verification — M29 t=53.5268 s, idx 2 — every number bit-identical
+
+`los_thermal_rate.py 104614 M29 -t 53.5268 --channel total --los-file
+_KM3.los`:
+
+```
+Rate_LOS            = 5.5845e+15 n/s
+Rate_tor            = 2.5608e+17 n/s
+rho_bnd             = 0.3585
+A / B               = 1.8821e+17 / 6.7862e+16  (73.50 / 26.50 %)
+closure sum(THNTX*DVOL*f)  = 2.5808e+17 n/s
+Rate_chord (real)   = 1.8573e+15 n/s
+Rate_det            = 1.8247e+08 n/s
+closure sum(THNTX*DVOL*f_det) = 1.8237e+08  (resid 5.26e-04)
+rho_50              = 0.2520
+```
+
+`los_th_bt_ratio.py 104614 M29 --idx 2`:
+
+```
+(TH/BT)_LOS                       = 0.5294
+cumulative (TH/BT)(rhot=1)        = 0.5299
+TH chord = 4.4135e+15, BT chord = 8.3372e+15
+TH whole-plasma = 3.8436e+17, BT whole-plasma = 8.8700e+17
+```
+
+All match the pre-refactor baseline captured immediately before the
+migration (and reproduce the CONTEXT.md targets recorded for these
+runs). `rho_bnd 0.3585` is the wide-chord (default `Rmin/Rmax
+2.60/3.16`) value; the historical `0.3070` quoted earlier in CONTEXT
+is the narrow-chord `2.70/3.10` value — both still reachable from CLI.
+
+## Stage B — tomorrow morning (planned 2026-06-19)
+
+**Add `src/neutron/km9/los_thermal_rate.py`** as a thin sibling
+script. Pure real-cell path; no box, no `rho_bnd`, no A/B/C
+decomposition (the box rate has no clean analogue when the chord
+wraps the torus tangentially and crosses the vessel twice).
+
+Outline:
+
+1. CLI: `pulse runid [--data-dir DIR] [--channel total|dd|dt]
+   [-t TIME] [--los-file PATH] [--no-subgrid] [--plot] [--save]
+   [--eq-source cdf|ppf …]`. Default `--los-file` points to
+   `src/neutron/km9/KM9.los`.
+2. Wiring: `sys.path.insert(0, ../common)`, then
+   `from los_common import find_run_dir, read_time_grid,
+   read_thermal_slice, read_los_file, EqCDF, EqPPF,
+   los_file_detector_rate`. No box-pipeline imports
+   (`los_shell_fraction`, `integrate_rate`, `toroidal_rate` are not
+   needed).
+3. Call `los_file_detector_rate(..., chord_kind="auto")` — the
+   auto-classifier reads `median(|w|) ≈ 0.05` for KM9 cells and
+   selects `"horizontal"`. Verify on day 1 by also running
+   `chord_kind="horizontal"` explicitly and confirming identical
+   results.
+4. Report `Rate_chord = sum eps*V`, `Rate_det = sum eps*C`, closure
+   `sum(THNTX*DVOL*f_det)`, `rho_50` (signal-median radius). No
+   `rho_bnd` line. Cells-inside-LCFS count and `vol_tot/c_tot` for
+   bookkeeping.
+5. KM9-tailored plots (1x3): (a) poloidal scatter of cells coloured
+   by `log10 C` over the LCFS — this is the diagnostic that visually
+   demonstrates the twice-crossing horizontal geometry; (b)
+   `f_det(rhot)` (single curve, no `rhot_crit` overlay since the
+   construction does not apply; no enclosed plateau expected); (c)
+   cumulative detector-signal fraction `cum_frac(rhot)` with `rho_50`
+   marked.
+6. `--save` writes `src/tmp/<pulse><runid>_KM9_LOS_profile_<chan>_<eq>_t<t>s.txt`,
+   columns `rhot THNTX[n/m3/s] f_det THLOS_det[n/m3/s] DVOL[m3]`.
+   Note the column header uses `THLOS_det` (the generic name); the
+   common-lib dict key `thkm14_det_si` is kept for backward
+   compatibility with km14 callers but interpret it as `THLOS_det` —
+   refactor the key name to `thlos_det_si` in a follow-up that also
+   updates `km14/los_thermal_rate.py` and `km14/km14_spectrum.py` (if
+   it reads that key).
+
+Expected first-cut results (no historical baseline — KM9 is new):
+
+* ~329 696 cells, fraction inside LCFS will vary because the LOS
+  extends well beyond the plasma both inboard and outboard
+  (R∈[1.7, …] m at one end, dragged out by large |x| at the other).
+* `Rate_det` should be of the same order as KM14's (1.8e+8 n/s) but
+  not numerically comparable — different etendue normalisation
+  altogether. The closure
+  `sum(THNTX*DVOL*f_det) ≈ Rate_det` is the cross-check that the
+  pipeline is consistent for the new chord; that's the acceptance
+  test.
+* `rho_50` will reflect where on the chord the LOS picks up most of
+  its thermal signal. For a horizontal chord at `Z` near the
+  midplane that should be midradius-ish; for an upper chord it will
+  be larger. Worth comparing to the KM14 value as a sanity reading
+  of the geometry.
+
+Open question to flag for tomorrow: the KM9 LOS reaches well **outside
+the LCFS** (and even outside the equilibrium computational box for
+some cells). `los_file_detector_rate` zeros emissivity outside the
+LCFS via the polygon mask, so those cells contribute zero to
+`Rate_det` (correct), but `rhot_at_points` in `_rhot_scatter` uses
+griddata-cubic which extrapolates over the `psi_n` node set
+(PSIRZ grid + axis + LCFS) and may return NaN or unstable values for
+the far-out cells before the inside mask zeros them. Likely benign
+(the mask kills it) but worth a print of the fraction of NaN/clipped
+rhot values on the first run.
+
+## Stage B follow-ups (not Stage B itself; later)
+
+* When `km14_spectrum.py` is opened next, swap its
+  `bzi.find_run_dir` to `from los_common import find_run_dir` for
+  consistency; same for `bt_los_emissivity.py` and
+  `bt_poloidal_distribution.py` (which carries its own duplicate).
+* Consider renaming the dict key `thkm14_det_si ->  thlos_det_si` in
+  `los_file_detector_rate` (currently kept for back-compat); requires
+  touching `km14/los_thermal_rate.py` and any other reader.
+* Mirror the split for `los_th_bt_ratio.py` if a KM9 sister
+  TH/BT-ratio script is needed (probably yes once the thermal one
+  works). Most of `los_th_bt_ratio.py` already runs through
+  `los_common`; the chord-specific bits are the box rates and the
+  point-detector approximation — both KM14-specific.
