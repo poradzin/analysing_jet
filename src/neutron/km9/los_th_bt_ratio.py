@@ -128,6 +128,9 @@ def parse_args(argv=None):
     p.add_argument('--no-median', action='store_true',
                    help='Disable the cosmetic running-median de-speckle of f_det.')
     p.add_argument('--plot', action='store_true', help='Show diagnostic plots.')
+    p.add_argument('--plot-los', action='store_true',
+                   help='Show the LOS geometry figure (plot_LoS.py): poloidal, '
+                        'top, and side-elevation views of the real LOS cells.')
     p.add_argument('--save', default=None, help='Save the figure to this path.')
     p.add_argument('--no-plot', action='store_true',
                    help='Suppress the figure even with --save.')
@@ -137,17 +140,15 @@ def parse_args(argv=None):
 # -----------------------------------------------------------------------------
 # Diagnostics (2x3)
 # -----------------------------------------------------------------------------
-def diagnostic_plots(res, cells, save=None):
-    """KM9 TH/BT 2x3 diagnostic:
-        (0,0) poloidal (R, Z) LOS cells coloured by log10 C over the LCFS
-        (0,1) top-of-machine (x-y) view vs the R=Rmag axis circle
-        (0,2) f_det(rhot) detector coupling
-        (1,0) local TH/BT(rhot) and cumulative TH/BT (C-weighted vs full plasma)
-        (1,1) per-shell detector-weighted emission TH*f_det*DVOL & BT*f_det*DVOL
-        (1,2) unused (removed)
+def diagnostic_plots(res, save=None):
+    """KM9 TH/BT 1x3 analysis diagnostic (LOS geometry is in ``plot_LoS.py``,
+    shown with ``--plot-los``):
+        (0) f_det(rhot) detector coupling
+        (1) local TH/BT(rhot) and cumulative TH/BT (C-weighted vs full plasma)
+        (2) per-shell detector-weighted emission TH*f_det*DVOL & BT*f_det*DVOL
     """
     xs = res['xs']
-    fig, axes = plt.subplots(2, 3, figsize=(18.5, 10.5))
+    fig, axes = plt.subplots(1, 3, figsize=(18.0, 5.6))
     fig.suptitle(
         f'KM9 LOS TH/BT  -  pulse {res["pulse"]}  TRANSP {res["runid"]}  '
         f'{res["chan_label"]}\n'
@@ -155,53 +156,8 @@ def diagnostic_plots(res, cells, save=None):
         f't_EQ={res["t_eq_jet"]:.3f}s  ({res["eq_label"]})'
     )
 
-    Rc = np.asarray(res['R_cells']); Zc = np.asarray(res['Z_cells'])
-    Cc = np.asarray(res['C_cells']); ins = np.asarray(res['inside_cells'])
-    xcell = np.asarray(cells['x']); ycell = np.asarray(cells['y'])
-    Rb, Zb = res['Rb'], res['Zb']
-    Rmag, Zmag = res['Rmag'], res['Zmag']
-    idxc = np.where(Cc > 0)[0]
-    if idxc.size > 40000:
-        idxc = idxc[np.linspace(0, idxc.size - 1, 40000).astype(int)]
-    out = idxc[~ins[idxc]]
-    inn = idxc[ins[idxc]]
-
-    # ---- (0,0) poloidal ---------------------------------------------------
-    ax = axes[0, 0]
-    ax.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
-    ax.scatter(Rc[out], Zc[out], c='0.8', s=2, alpha=0.4, linewidths=0)
-    sc = ax.scatter(Rc[inn], Zc[inn], c=np.log10(Cc[inn]), s=4, cmap='plasma',
-                    alpha=0.7, linewidths=0, label='cells inside LCFS')
-    fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04).set_label(
-        r'$\log_{10}$ C  [m$^3$]')
-    ax.plot([Rmag], [Zmag], 'r+', ms=10, label=f'axis ({Rmag:.2f},{Zmag:.2f})')
-    ax.set_xlabel('R [m]'); ax.set_ylabel('Z [m]')
-    ax.set_title('Poloidal (R, Z): KM9 LOS cells + LCFS')
-    ax.legend(loc='best', fontsize=8); ax.grid(True, ls=':', lw=0.5)
-    ax.set_aspect('equal', adjustable='box')
-
-    # ---- (0,1) top view ---------------------------------------------------
-    ax = axes[0, 1]
-    th = np.linspace(0.0, 2.0 * np.pi, 361)
-    ax.scatter(xcell[out], ycell[out], c='0.8', s=2, alpha=0.4, linewidths=0)
-    sc = ax.scatter(xcell[inn], ycell[inn], c=np.log10(Cc[inn]), s=4,
-                    cmap='plasma', alpha=0.7, linewidths=0)
-    fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04).set_label(
-        r'$\log_{10}$ C  [m$^3$]')
-    ax.plot(Rmag * np.cos(th), Rmag * np.sin(th), 'r-', lw=1.4,
-            label=f'magnetic axis R={Rmag:.2f} m')
-    ax.plot(Rb.min() * np.cos(th), Rb.min() * np.sin(th), 'b--', lw=0.9,
-            label=f'LCFS R_in={Rb.min():.2f}')
-    ax.plot(Rb.max() * np.cos(th), Rb.max() * np.sin(th), 'b--', lw=0.9,
-            label=f'LCFS R_out={Rb.max():.2f}')
-    ax.plot([0.0], [0.0], 'k+', ms=9, label='machine axis')
-    ax.set_xlabel('x [m] (toroidal)'); ax.set_ylabel('y [m] (radial)')
-    ax.set_title('Top view (x-y): LOS vs magnetic-axis circle')
-    ax.legend(loc='upper right', fontsize=7); ax.grid(True, ls=':', lw=0.5)
-    ax.set_aspect('equal', adjustable='box')
-
-    # ---- (0,2) f_det ------------------------------------------------------
-    ax = axes[0, 2]
+    # ---- (0) f_det --------------------------------------------------------
+    ax = axes[0]
     ax.plot(xs, res['f_det'], 'm-', lw=1.4, label='f_det (real LOS)')
     ax.fill_between(xs, 0.0, res['f_det'], color='m', alpha=0.15)
     if res['rhot_min'] is not None and np.isfinite(res['rhot_min']):
@@ -211,8 +167,8 @@ def diagnostic_plots(res, cells, save=None):
     ax.set_title('Detector-coupling weight'); ax.set_xlim(0, 1)
     ax.grid(True, ls=':', lw=0.5); ax.legend(loc='best', fontsize=8)
 
-    # ---- (1,0) TH/BT vs rhot ---------------------------------------------
-    ax = axes[1, 0]
+    # ---- (1) TH/BT vs rhot -----------------------------------------------
+    ax = axes[1]
     ax.plot(xs, res['ratio_local'], 'k-', lw=1.4, label='local TH/BT(rhot)')
     ax.plot(xs, res['ratio_cum_det'], 'm-', lw=1.6,
             label=f'cum. C-weighted -> {res["thbt_los"]:.3f}')
@@ -226,8 +182,8 @@ def diagnostic_plots(res, cells, save=None):
     ax.set_ylim(bottom=0.0)
     ax.grid(True, ls=':', lw=0.5); ax.legend(loc='best', fontsize=8)
 
-    # ---- (1,1) per-shell detector-weighted emission -----------------------
-    ax = axes[1, 1]
+    # ---- (2) per-shell detector-weighted emission ------------------------
+    ax = axes[2]
     ax.plot(xs, res['shell_th_det'], 'b-', lw=1.4,
             label=r'TH$\cdot f_{det}\cdot$DVOL')
     ax.fill_between(xs, 0.0, res['shell_th_det'], color='b', alpha=0.12)
@@ -240,7 +196,6 @@ def diagnostic_plots(res, cells, save=None):
     ax.set_xlim(0, 1); ax.set_ylim(bottom=0.0)
     ax.grid(True, ls=':', lw=0.5); ax.legend(loc='best', fontsize=8)
 
-    fig.delaxes(axes[1, 2])
     plt.tight_layout()
     if save:
         fig.savefig(save, dpi=130)
@@ -375,8 +330,15 @@ def main(argv=None):
         Rb=Rb, Zb=Zb, Rmag=eqs.Rmag, Zmag=eqs.Zmag,
     )
 
+    if args.plot_los:
+        import plot_LoS
+        plot_LoS.plot_los_geometry(
+            cells, fTH['inside_cells'], Rb, Zb, eqs.Rmag, eqs.Zmag,
+            title=f'KM9 LOS geometry  -  pulse {args.pulse}  TRANSP {args.runid}'
+                  f'   idx {idx}   t_EQ={eqs.t_eq_jet:.3f}s',
+            rhot_min=fTH['rhot_min'])
     if (args.plot or args.save) and not args.no_plot:
-        diagnostic_plots(res, cells, save=args.save)
+        diagnostic_plots(res, save=args.save)
     return 0
 
 

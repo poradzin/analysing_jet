@@ -45,7 +45,7 @@ def _scatter_cells(ax, fig, hx, hy, Cc, inn, out, clabel=True):
 
 def plot_los_geometry(cells, inside_cells, Rb, Zb, Rmag, Zmag,
                       title="", rhot_min=None, save=None, show=True,
-                      max_pts=40000):
+                      max_pts=40000, axis_tol=0.05):
     """Three-projection geometry figure of a real LOS cell cloud.
 
     Parameters
@@ -70,14 +70,24 @@ def plot_los_geometry(cells, inside_cells, Rb, Zb, Rmag, Zmag,
     inn = idx[ins[idx]]
     out = idx[~ins[idx]]
 
-    # Closest-approach cell to the axis (poloidal distance), over in-LCFS cells.
-    star = None
-    if ins.any():
-        d = np.hypot(Rc - Rmag, Zc - Zmag)
-        d = np.where(ins & (Cc > 0), d, np.inf)
-        j = int(np.argmin(d))
-        if np.isfinite(d[j]):
-            star = (j, float(d[j]))
+    # Where does the magnetic-axis *ring* (R=Rmag at every toroidal angle) pass
+    # through the LOS? By axisymmetry the ring's 3-D distance to a cell equals
+    # the poloidal distance hypot(R-Rmag, Z-Zmag). The cells within ``axis_tol``
+    # of the ring are the ones the axis threads through -- recolour them so the
+    # passage (the chord goes in one side of the axis and out the other) is
+    # visible as a coloured cluster, rather than the chord looking like it runs
+    # *along* the axis. The closest cell (the actual grazing point) is reported.
+    d_axis = np.hypot(Rc - Rmag, Zc - Zmag)
+    on_axis = ins & (Cc > 0) & (d_axis <= axis_tol)
+    dmin_cm = float(d_axis[ins & (Cc > 0)].min()) * 100.0 if ins.any() else float('nan')
+    on_lbl = (f'on axis ($\\leq${axis_tol * 100:.0f} cm; min {dmin_cm:.1f} cm)'
+              if on_axis.any() else None)
+
+    def _mark_axis(ax, hx, hy):
+        """Recolour the cells the axis ring threads through (bright red)."""
+        if on_axis.any():
+            ax.scatter(hx[on_axis], hy[on_axis], c='red', s=16, alpha=0.9,
+                       linewidths=0, label=on_lbl, zorder=5)
 
     fig, axes = plt.subplots(1, 3, figsize=(19.0, 5.6))
     if title:
@@ -88,11 +98,8 @@ def plot_los_geometry(cells, inside_cells, Rb, Zb, Rmag, Zmag,
     ax = axes[0]
     ax.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
     _scatter_cells(ax, fig, Rc, Zc, Cc, inn, out)
-    ax.plot([Rmag], [Zmag], 'r+', ms=11, label=f'axis ({Rmag:.2f}, {Zmag:.2f})')
-    if star is not None:
-        ax.plot([Rc[star[0]]], [Zc[star[0]]], marker='*', ms=13, mfc='lime',
-                mec='k', mew=0.6, ls='none',
-                label=f'closest approach ({star[1] * 100:.1f} cm)')
+    ax.plot([Rmag], [Zmag], 'k+', ms=11, label=f'axis ({Rmag:.2f}, {Zmag:.2f})')
+    _mark_axis(ax, Rc, Zc)
     ax.set_xlabel('R [m]'); ax.set_ylabel('Z [m]')
     ax.set_title('Poloidal (R, Z)')
     ax.legend(loc='best', fontsize=8); ax.grid(True, ls=':', lw=0.5)
@@ -108,6 +115,7 @@ def plot_los_geometry(cells, inside_cells, Rb, Zb, Rmag, Zmag,
     ax.plot(Rb.max() * np.cos(th), Rb.max() * np.sin(th), 'b--', lw=0.9,
             label=f'LCFS R_out={Rb.max():.2f}')
     ax.plot([0.0], [0.0], 'k+', ms=9, label='machine axis')
+    _mark_axis(ax, x, y)
     ax.set_xlabel('x [m]  (toroidal)'); ax.set_ylabel('y [m]  (radial)')
     ax.set_title('Top view (x, y): LOS vs axis circle')
     ax.legend(loc='upper right', fontsize=7); ax.grid(True, ls=':', lw=0.5)
@@ -120,17 +128,17 @@ def plot_los_geometry(cells, inside_cells, Rb, Zb, Rmag, Zmag,
     # R_out, so the plasma silhouette spans x in [-R_out, R_out].
     ax = axes[2]
     _scatter_cells(ax, fig, x, Zc, Cc, inn, out)
-    ax.axhline(Zmag, color='r', lw=1.4, label=f'axis height Z={Zmag:.2f} m')
+    # Axis height is only a *reference* level (the ring sits at Z=Zmag for every
+    # phi); the chord is NOT along the axis -- it merely runs near this height.
+    # The actual axis-ring crossings (R=Rmag) are starred, with drop-lines at
+    # their toroidal x, so the touch (lime) vs the far crossing (cyan) is clear.
+    ax.axhline(Zmag, color='r', ls=':', lw=1.0,
+               label=f'axis height Z={Zmag:.2f} m (ref., any $\\phi$)')
     ax.axhspan(float(Zb.min()), float(Zb.max()), color='b', alpha=0.07)
     ax.axhline(float(Zb.min()), color='b', ls='--', lw=0.8,
                label=f'plasma Z extent [{Zb.min():.2f}, {Zb.max():.2f}]')
     ax.axhline(float(Zb.max()), color='b', ls='--', lw=0.8)
-    ax.axvline(-float(Rb.max()), color='0.6', ls=':', lw=0.8)
-    ax.axvline(float(Rb.max()), color='0.6', ls=':', lw=0.8,
-               label=f'|x| = R_out = {Rb.max():.2f} m')
-    if star is not None:
-        ax.plot([x[star[0]]], [Zc[star[0]]], marker='*', ms=13, mfc='lime',
-                mec='k', mew=0.6, ls='none', label='closest approach')
+    _mark_axis(ax, x, Zc)
     ax.set_xlabel('x [m]  (toroidal)'); ax.set_ylabel('Z [m]')
     ttl = 'Side view (x, Z): chord vs axis height'
     if rhot_min is not None and np.isfinite(rhot_min):

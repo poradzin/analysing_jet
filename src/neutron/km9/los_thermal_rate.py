@@ -184,95 +184,51 @@ def parse_args(argv=None):
 
 
 # -----------------------------------------------------------------------------
-# Diagnostics  (KM9-tailored 2x2)
+# Diagnostics  (KM9-tailored 1x3; LOS geometry lives in plot_LoS.py / --plot-los)
 # -----------------------------------------------------------------------------
-def diagnostic_plots(losf, cells, xs, thntx_si_prof, dvol_m3, Rb, Zb, Rmag, Zmag,
+def diagnostic_plots(losf, xs, thntx_si_prof, dvol_m3,
                      pulse, runid, time_jet, t_eq_jet, eq_label, chan_label):
-    """KM9 2x3 diagnostic:
-        (0,0) poloidal (R, Z) scatter of LOS cells coloured by log10 C over LCFS
-        (0,1) top-of-machine (toroidal x-y plane) view vs the R=Rmag axis circle
-              -- shows whether/where the horizontal chord crosses the axis
-        (0,2) per-shell emission rate: THNTX*DVOL (whole plasma) vs
-              THNTX*f_det*DVOL (detector-weighted; integral = Rate_det)
-        (1,0) f_det(rhot) detector-coupling weight (single curve)
-        (1,1) cumulative detector-signal fraction with rho_50 marked
-        (1,2) unused (removed)
+    """KM9 1x3 analysis diagnostic (no geometry panels -- those are in
+    ``plot_LoS.py``, shown with ``--plot-los``):
+        (0) f_det(rhot) detector-coupling weight (single curve)
+        (1) per-shell emission rate: THNTX*DVOL (whole plasma) vs
+            THNTX*f_det*DVOL (detector-weighted; integral = Rate_det)
+        (2) cumulative detector-signal fraction with rho_50 marked
     """
-    fig, axes = plt.subplots(2, 3, figsize=(18.5, 10.5))
+    fig, axes = plt.subplots(1, 3, figsize=(18.0, 5.6))
     fig.suptitle(
         f'KM9 LOS thermal-neutron rate  -  pulse {pulse}  TRANSP {runid}  '
         f'{chan_label}\n'
         f't_JET={time_jet:.3f}s  t_EQ={t_eq_jet:.3f}s  ({eq_label})'
     )
 
-    # ---- (0,0) poloidal cell scatter over LCFS ---------------------------
-    ax0 = axes[0, 0]
-    ax0.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
-    Rc = np.asarray(losf['R_cells'])
-    Zc = np.asarray(losf['Z_cells'])
-    Cc = np.asarray(losf['C_cells'])
-    ins = np.asarray(losf['inside_cells'])
-    idx = np.where(Cc > 0)[0]
-    if idx.size > 40000:
-        idx = idx[np.linspace(0, idx.size - 1, 40000).astype(int)]
-    # Dim out-of-plasma cells, highlight in-LCFS cells coloured by etendue.
-    out = idx[~ins[idx]]
-    inn = idx[ins[idx]]
-    ax0.scatter(Rc[out], Zc[out], c='0.8', s=2, alpha=0.4, linewidths=0,
-                label='cells outside LCFS')
-    sc = ax0.scatter(Rc[inn], Zc[inn], c=np.log10(Cc[inn]), s=4,
-                     cmap='plasma', alpha=0.7, linewidths=0,
-                     label='cells inside LCFS')
-    cb = fig.colorbar(sc, ax=ax0, fraction=0.046, pad=0.04)
-    cb.set_label(r'$\log_{10}$ C  [m$^3$]  (etendue)')
-    ax0.plot([Rmag], [Zmag], 'r+', ms=10,
-             label=f'axis ({Rmag:.3f}, {Zmag:.3f})')
-    ax0.set_xlabel('R [m]')
-    ax0.set_ylabel('Z [m]')
-    ax0.set_title('Poloidal (R, Z): KM9 LOS cells + LCFS')
-    ax0.legend(loc='best', fontsize=8)
-    ax0.grid(True, ls=':', lw=0.5)
-    ax0.set_aspect('equal', adjustable='box')
+    # ---- (0) f_det(rhot) -------------------------------------------------
+    ax1 = axes[0]
+    fd = np.asarray(losf['f_det'])
+    ax1.plot(xs, fd, 'm-', lw=1.4, label='f_det (real LOS)')
+    ax1.fill_between(xs, 0.0, fd, color='m', alpha=0.15)
+    rmin = losf.get('rhot_min')
+    if rmin is not None and np.isfinite(rmin):
+        ax1.axvline(rmin, color='c', ls=':', lw=1.0,
+                    label=f'min sampled rhot (resolution floor) = {rmin:.4f}')
+    if np.isfinite(losf['rho_med']):
+        ax1.axvline(losf['rho_med'], color='k', ls='-.', lw=1.0,
+                    label=f'rho_50 = {losf["rho_med"]:.4f}')
+    ax1.set_xlabel('rhot')
+    ax1.set_ylabel(r'$f_{det}(\rho_t) = C_{bin}/DVOL$')
+    ax1.set_title('Detector-coupling weight')
+    ax1.set_xlim(0.0, 1.0)
+    ax1.grid(True, ls=':', lw=0.5)
+    ax1.legend(loc='best', fontsize=8)
 
-    # ---- (0,1) top-of-machine (x-y) view vs the magnetic-axis circle -----
-    # The magnetic axis is the ring R = Rmag (any toroidal angle); the plasma
-    # spans the annulus R in [Rb.min, Rb.max]. In the toroidal x-y plane the
-    # KM9 chord is a near-straight tangential band -- if it cuts inside the
-    # R=Rmag circle it crosses the axis radius (combine with the poloidal panel
-    # / rhot_min to confirm it also reaches the axis height).
-    axT = axes[0, 1]
-    xc = np.asarray(cells['x'])
-    yc = np.asarray(cells['y'])
-    th = np.linspace(0.0, 2.0 * np.pi, 361)
-    axT.scatter(xc[out], yc[out], c='0.8', s=2, alpha=0.4, linewidths=0,
-                label='cells outside LCFS')
-    scT = axT.scatter(xc[inn], yc[inn], c=np.log10(Cc[inn]), s=4,
-                      cmap='plasma', alpha=0.7, linewidths=0,
-                      label='cells inside LCFS')
-    cbT = fig.colorbar(scT, ax=axT, fraction=0.046, pad=0.04)
-    cbT.set_label(r'$\log_{10}$ C  [m$^3$]  (etendue)')
-    axT.plot(Rmag * np.cos(th), Rmag * np.sin(th), 'r-', lw=1.4,
-             label=f'magnetic axis  R={Rmag:.3f} m')
-    axT.plot(Rb.min() * np.cos(th), Rb.min() * np.sin(th), 'b--', lw=0.9,
-             label=f'LCFS R_in={Rb.min():.2f} m')
-    axT.plot(Rb.max() * np.cos(th), Rb.max() * np.sin(th), 'b--', lw=0.9,
-             label=f'LCFS R_out={Rb.max():.2f} m')
-    axT.plot([0.0], [0.0], 'k+', ms=9, label='machine axis (R=0)')
-    axT.set_xlabel('x [m]  (toroidal)')
-    axT.set_ylabel('y [m]  (in-plane, radial)')
-    axT.set_title('Top view (x-y): LOS vs magnetic-axis circle')
-    axT.legend(loc='upper right', fontsize=7)
-    axT.grid(True, ls=':', lw=0.5)
-    axT.set_aspect('equal', adjustable='box')
-
-    # ---- (0,2) per-shell emission rate: THNTX*DVOL vs THNTX*f_det*DVOL ----
+    # ---- (1) per-shell emission rate: THNTX*DVOL vs THNTX*f_det*DVOL ------
     # THNTX*DVOL is the whole-plasma thermal emission per flux shell [n/s];
     # THNTX*f_det*DVOL is the detector-weighted per-shell contribution whose
     # integral over rhot equals Rate_det. The detector curve is ~f_det (~1e-8)
     # times smaller, so it gets its own right-hand axis (unlike the KM14 box
     # where f<=1 keeps the two comparable on one axis); the shapes show how the
     # LOS+etendue reweight the plasma emission radially.
-    ax3 = axes[0, 2]
+    ax3 = axes[1]
     dvol = np.asarray(dvol_m3)
     fd_p = np.asarray(losf['f_det'])
     emis_plasma = thntx_si_prof * dvol             # n/s per shell (whole plasma)
@@ -302,27 +258,8 @@ def diagnostic_plots(losf, cells, xs, thntx_si_prof, dvol_m3, Rb, Zb, Rmag, Zmag
                   f'{losf["rate_det"]:.2e} n/s)')
     ax3.legend(lns, [l.get_label() for l in lns], loc='upper right', fontsize=7)
 
-    # ---- (1,0) f_det(rhot) -----------------------------------------------
-    ax1 = axes[1, 0]
-    fd = np.asarray(losf['f_det'])
-    ax1.plot(xs, fd, 'm-', lw=1.4, label='f_det (real LOS)')
-    ax1.fill_between(xs, 0.0, fd, color='m', alpha=0.15)
-    rmin = losf.get('rhot_min')
-    if rmin is not None and np.isfinite(rmin):
-        ax1.axvline(rmin, color='c', ls=':', lw=1.0,
-                    label=f'min sampled rhot (resolution floor) = {rmin:.4f}')
-    if np.isfinite(losf['rho_med']):
-        ax1.axvline(losf['rho_med'], color='k', ls='-.', lw=1.0,
-                    label=f'rho_50 = {losf["rho_med"]:.4f}')
-    ax1.set_xlabel('rhot')
-    ax1.set_ylabel(r'$f_{det}(\rho_t) = C_{bin}/DVOL$')
-    ax1.set_title('Detector-coupling weight')
-    ax1.set_xlim(0.0, 1.0)
-    ax1.grid(True, ls=':', lw=0.5)
-    ax1.legend(loc='best', fontsize=8)
-
-    # ---- (1,1) cumulative detector-signal fraction -----------------------
-    ax2 = axes[1, 1]
+    # ---- (2) cumulative detector-signal fraction -------------------------
+    ax2 = axes[2]
     ax2.plot(losf['cum_rhot'], losf['cum_frac'], 'b-', lw=1.4,
              label='cum. detector signal')
     ax2.axhline(0.5, color='0.6', ls=':', lw=0.8)
@@ -336,9 +273,6 @@ def diagnostic_plots(losf, cells, xs, thntx_si_prof, dvol_m3, Rb, Zb, Rmag, Zmag
     ax2.set_ylim(0.0, 1.02)
     ax2.grid(True, ls=':', lw=0.5)
     ax2.legend(loc='best', fontsize=8)
-
-    # (1,2) is unused in the 2x3 grid.
-    fig.delaxes(axes[1, 2])
 
     plt.tight_layout()
     plt.show()
@@ -481,10 +415,17 @@ def main(argv=None):
         print(f'Saved LOS profile to {out_path}')
 
     # ------- Plot -------------------------------------------------------
-    if args.plot:
+    if args.plot_los:
+        import plot_LoS
         Rb, Zb = eqs.lcfs()
-        diagnostic_plots(losf, cells, xs_sorted, thntx_si_profile, dvol_m3,
-                         Rb, Zb, Rmag, Zmag, args.pulse, args.runid, time_jet,
+        plot_LoS.plot_los_geometry(
+            cells, losf['inside_cells'], Rb, Zb, Rmag, Zmag,
+            title=f'KM9 LOS geometry  -  pulse {args.pulse}  TRANSP {args.runid}'
+                  f'   t_EQ={eqs.t_eq_jet:.3f}s',
+            rhot_min=losf['rhot_min'])
+    if args.plot:
+        diagnostic_plots(losf, xs_sorted, thntx_si_profile, dvol_m3,
+                         args.pulse, args.runid, time_jet,
                          eqs.t_eq_jet, eqs.label, chan_label)
 
     return 0
