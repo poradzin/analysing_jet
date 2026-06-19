@@ -67,22 +67,38 @@ the real directions differ from the point-detector model by only ~0.6 deg
 is now exact rather than approximated.
 
 ``--los-file`` also (independently of ``--bt-aniso``) adds the real-LOS detector
-weighting to the plot: the per-shell etendue coupling ``f_det = C_bin/DVOL``
+weighting to the plots: the per-shell etendue coupling ``f_det = C_bin/DVOL``
 (reused from ``los_thermal_rate``, emissivity-independent) is applied to both TH
 and BT for a C-weighted cumulative ``Sum(TH f_det DVOL)/Sum(BT f_det DVOL)``,
-overlaid on the geometric-LOS and full-plasma cumulatives, plus the real LOS
-cell footprint over the TH/BT(local) map and ``f_det`` on the weight panel.
+overlaid on the geometric-LOS and full-plasma cumulatives (``--plot``), plus the
+real LOS cell footprint over the TH/BT(local) map (``--plot-los``) and ``f_det``
+on the weight panel.
+
+Plotting (mirrors km9 / ``los_thermal_rate.py``)
+------------------------------------------------
+``--plot`` shows the **radial analysis** as a KM9-style 1x3: the
+detector-coupling weight ``f(rhot)`` [+ real-LOS ``f_det``], TH/BT vs rhot
+(cumulative LOS / real-LOS / full-plasma, with the local ratio overlaid), and
+the per-shell detector signal ``TH*f*DVOL`` / ``BT*f*DVOL``. ``--diagnostic-plot``
+adds a second 1x3 figure of the effective per-shell weights (PDF in rhot of
+DVOL, ``f*DVOL``, ``f_det*DVOL`` and their action on TH and BT). ``--plot-los``
+shows the **LOS geometry**: the spatial ``eps_TH``, ``eps_BT`` and ``TH/BT``
+(R, Z) maps over the chord grid; with ``--los-file`` the real LOS cell footprint
+is overlaid on the TH/BT map so the simplified box-grid and real geometries can
+be compared. ``--save <file>`` writes every requested figure (``<file>``
+analysis, ``<file>_los`` geometry, and ``<file>_weights`` with
+``--diagnostic-plot``); ``--no-plot`` suppresses all of them.
 
 CLI
 ---
-    python los_th_bt_ratio.py 104614 M30 --idx 1 --plot          # total (default)
+    python los_th_bt_ratio.py 104614 M30 --idx 1 --plot --plot-los  # total (default)
     python los_th_bt_ratio.py 104614 M30 --channel dd --bt-mode zone
     python los_th_bt_ratio.py 104614 M29 --channel dd --bt-aniso # finite-height view
 
 Flags: --idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone}
-       --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot
-       --bt-aniso --detector-R --detector-height --los-file --cone-deg --nsamp
-       --fast-norm {bdens,ntot} --no-rotation --seed
+       --Rmin --Rmax --wtor --nR --nZ --plot --plot-los --diagnostic-plot
+       --save --no-plot --bt-aniso --detector-R --detector-height --los-file
+       --cone-deg --nsamp --fast-norm {bdens,ntot} --no-rotation --seed
 """
 
 from __future__ import annotations
@@ -112,6 +128,7 @@ from los_common import (
     interp_flux_to,
     los_shell_fraction,
     los_file_detector_rate,
+    normalized_coupling_weight,
 )
 
 import bt_zone_integrator as bzi
@@ -469,7 +486,18 @@ def main(argv=None):
     p.add_argument("--wtor", type=float, default=W_TOR_DEFAULT)
     p.add_argument("--nR", type=int, default=NR_DEFAULT)
     p.add_argument("--nZ", type=int, default=NZ_DEFAULT)
-    p.add_argument("--plot", action="store_true")
+    p.add_argument("--plot", action="store_true",
+                   help="show the radial-analysis figures (LOS weight f, "
+                        "per-shell rate, R-integrated emissivity vs Z, local "
+                        "and cumulative TH/BT vs rhot, effective weights)")
+    p.add_argument("--plot-los", action="store_true",
+                   help="show the LOS geometry figure: eps_TH, eps_BT and "
+                        "TH/BT (R,Z) maps over the chord grid (real LOS cells "
+                        "overlaid on the TH/BT map when --los-file is given)")
+    p.add_argument("--diagnostic-plot", action="store_true",
+                   help="also show/save the effective per-shell weight figure "
+                        "(PDF in rhot of DVOL, f*DVOL, f_det*DVOL and their "
+                        "action on TH and BT)")
     p.add_argument("--save", default=None)
     p.add_argument("--no-plot", action="store_true")
     args = p.parse_args(argv)
@@ -532,7 +560,7 @@ def main(argv=None):
 
     # thermal emissivity on grid (N/CM3/SEC -> n/m3/s) + chord/torus integrals
     th_grid = profile_on_grid(x_th, th_prof, rhot, inside) * 1.0e6
-    th_los, th_innerZ = chord_integral(th_grid, R, Z, args.wtor)
+    th_los, _ = chord_integral(th_grid, R, Z, args.wtor)
     th_tor = toroidal_integral(th_grid, R, Z)
 
     # beam-target zone reactivity. With --bt-aniso each zone's NUBEAM BTN rate is
@@ -575,7 +603,7 @@ def main(argv=None):
         los, innerZ = chord_integral(grid, R, Z, args.wtor)
         return grid, los, innerZ, xb, pb
 
-    bt_grid, bt_los, bt_innerZ, x_bt, bt_prof = _bt_chord(bt_zone_eff)
+    bt_grid, bt_los, _, x_bt, bt_prof = _bt_chord(bt_zone_eff)
     bt_tor = toroidal_integral(bt_grid, R, Z)
     # isotropic chord rate for the anisotropy cross-check (same geometry)
     bt_los_iso = _bt_chord(bt_zone_sum)[1] if args.bt_aniso else bt_los
@@ -672,10 +700,22 @@ def main(argv=None):
         _save_weight_profile(wp, run_id, idx, chan_label, th_var, bt_keys,
                              fi["time"], th_los / bt_los, aniso=args.bt_aniso)
 
-    if (args.plot or args.save) and not args.no_plot:
-        make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
-                  Rb, Zb, run_id, idx, plot_label, th_los, bt_los, wp,
-                  save=args.save, los_det=los_det)
+    # Geometry views (--plot-los; spatial R,Z maps) and the radial analysis
+    # (--plot) live in separate figures, mirroring km9 / los_thermal_rate. With
+    # --save both are written to files; --no-plot suppresses everything.
+    do_geom = (args.plot_los or args.save) and not args.no_plot
+    do_analysis = (args.plot or args.save) and not args.no_plot
+    if args.save and (do_geom or do_analysis):
+        import matplotlib
+        matplotlib.use("Agg")
+    if do_geom:
+        los_geometry_plots(R, Z, inside, th_grid, bt_grid, Rb, Zb,
+                           run_id, idx, plot_label, th_los, bt_los,
+                           save=args.save, los_det=los_det)
+    if do_analysis:
+        make_plot(run_id, idx, plot_label, th_los, bt_los, wp,
+                  save=args.save, los_det=los_det,
+                  diagnostic=args.diagnostic_plot)
     return 0
 
 
@@ -711,12 +751,19 @@ def _save_weight_profile(wp, run_id, idx, chan_label, th_var, bt_keys,
     return out_path
 
 
-def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
-              Rb, Zb, run_id, idx, chan_label, th_los, bt_los, wp, save=None,
-              los_det=None):
-    import matplotlib
-    if save is not None:
-        matplotlib.use("Agg")
+def los_geometry_plots(R, Z, inside, th_grid, bt_grid, Rb, Zb,
+                       run_id, idx, chan_label, th_los, bt_los,
+                       save=None, los_det=None):
+    """KM14 LOS geometry figure (1x3), shown with ``--plot-los`` (mirrors
+    ``km9/plot_LoS.py`` and the ``los_thermal_rate.py`` split): the *spatial*
+    (R, Z) emissivity maps and the local TH/BT field over the chord grid. The
+    simplified box-chord geometry is always drawn; when ``--los-file`` is given
+    the real LOS cell footprint is overlaid on the TH/BT map, so the simplified
+    and real geometries can be compared.
+        (0) eps_TH(R, Z)
+        (1) eps_BT(R, Z)
+        (2) TH/BT (local) [+ real LOS cells]
+    """
     import matplotlib.pyplot as plt
     Rg, Zg = np.meshgrid(R, Z, indexing="ij")
     # Local TH/BT map: only where BT is a meaningful fraction of its peak. Near
@@ -731,12 +778,12 @@ def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
     rin = ratio_grid[np.isfinite(ratio_grid)]
     rlo, rhi = (float(np.percentile(rin, 2)), float(np.percentile(rin, 98))) \
         if rin.size else (0.0, 1.0)
-    fig, ax = plt.subplots(2, 4, figsize=(20, 11))
-    # ---- top row: (R, Z) emissivity maps + R-integrated vs Z ----
+
+    fig, ax = plt.subplots(1, 3, figsize=(16, 5.4))
     for a, grid, ttl, cmap, lims in [
-            (ax[0, 0], np.where(inside, th_grid, np.nan), "eps_TH [n/m3/s]", "inferno", (None, None)),
-            (ax[0, 1], np.where(inside, bt_grid, np.nan), "eps_BT [n/m3/s]", "inferno", (None, None)),
-            (ax[0, 2], ratio_grid, "TH/BT (local)", "coolwarm", (rlo, rhi))]:
+            (ax[0], np.where(inside, th_grid, np.nan), "eps_TH [n/m3/s]", "inferno", (None, None)),
+            (ax[1], np.where(inside, bt_grid, np.nan), "eps_BT [n/m3/s]", "inferno", (None, None)),
+            (ax[2], ratio_grid, "TH/BT (local)", "coolwarm", (rlo, rhi))]:
         pc = a.pcolormesh(Rg, Zg, grid, shading="auto", cmap=cmap,
                           vmin=lims[0], vmax=lims[1])
         a.plot(Rb, Zb, "c-", lw=1)
@@ -751,68 +798,104 @@ def make_plot(R, Z, rhot, inside, th_grid, bt_grid, th_innerZ, bt_innerZ,
         sel = np.where(ins)[0]
         if sel.size > 15000:
             sel = sel[np.linspace(0, sel.size - 1, 15000).astype(int)]
-        ax[0, 2].scatter(Rc[sel], Zc[sel], s=1.0, c="lime", alpha=0.12,
-                         linewidths=0)
-        ax[0, 2].set_title("TH/BT (local) + real LOS cells")
-    ax[0, 3].plot(th_innerZ, Z, "r-", label="TH")
-    ax[0, 3].plot(bt_innerZ, Z, "b-", label="BT")
-    ax[0, 3].set_xlabel(r"$\int \epsilon\, dR$ [n/m2/s]"); ax[0, 3].set_ylabel("Z [m]")
-    ax[0, 3].set_title(f"R-integrated vs Z\n(TH/BT)_LOS={th_los/bt_los:.3f}")
-    ax[0, 3].legend(); ax[0, 3].grid(True, ls=":")
+        ax[2].scatter(Rc[sel], Zc[sel], s=1.0, c="lime", alpha=0.12,
+                      linewidths=0)
+        ax[2].set_title("TH/BT (local) + real LOS cells")
 
-    # ---- bottom row: LOS weight function & TH/BT vs rhot ----
+    fig.suptitle(f"{run_id} idx{idx}  KM14 LOS geometry  {chan_label}"
+                 f"   (TH/BT)_LOS={th_los/bt_los:.3f}")
+    fig.tight_layout()
+    if save:
+        import os
+        base, ext = os.path.splitext(save)
+        save_g = f"{base}_los{ext or '.png'}"
+        fig.savefig(save_g, dpi=130)
+        print(f"Saved LOS geometry plot to {save_g}")
+    else:
+        plt.show()
+    return fig
+
+
+def make_plot(run_id, idx, chan_label, th_los, bt_los, wp,
+              save=None, los_det=None, diagnostic=False):
+    """KM14 radial-analysis diagnostic, shown with ``--plot`` (the spatial
+    (R, Z) maps are in ``los_geometry_plots`` / ``--plot-los``).
+
+    The main figure is a 1x3 of rhot-radial curves, laid out like the KM9
+    ``los_thermal_rate.py`` diagnostic:
+
+      (0) Detector-coupling weight  -- geometric LOS f(rhot) [+ real-LOS f_det]
+      (1) TH/BT vs rhot             -- cumulative TH/BT (LOS / real-LOS / plasma)
+                                       with the local ratio overlaid
+      (2) Per-shell detector signal -- per-shell LOS rate TH*f*DVOL, BT*f*DVOL
+
+    With ``diagnostic=True`` (``--diagnostic-plot``) a second 1x3 figure of the
+    effective per-shell weights (PDF in rhot) is also produced.
+    """
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 3, figsize=(18, 5.6))
+
     xs = wp["xs"]
-    a = ax[1, 0]                                   # geometric LOS weight f(rhot)
-    a.plot(xs, wp["f"], "g-", lw=1.4, label="f geometric (box)")
-    a.fill_between(xs, 0.0, wp["f"], color="g", alpha=0.15)
-    a.set_xlim(0, 1); a.set_ylim(0, 1.05); a.grid(True, ls=":")
-    a.set_xlabel("rhot"); a.set_ylabel(r"$f(\rho_t)$")
-    a.set_title("LOS weight function")
+    a = ax[0]                                      # (0) detector-coupling weight
+    # Normalize each coupling weight by int(w*DVOL drhot) so int(w_norm*DVOL)=1.
+    # This pins the arbitrary etendue scale to a common convention -> KM9 and
+    # KM14 f_det are directly comparable, and TH/BT is unchanged (the constant
+    # cancels in the ratio). See los_common.normalized_coupling_weight.
+    dvol = wp["dvol_m3"]
+    fn = normalized_coupling_weight(wp["f"], dvol, xs)
+    a.plot(xs, fn, "g-", lw=1.4, label="f geometric (box)")
+    a.fill_between(xs, 0.0, fn, color="g", alpha=0.15)
+    a.set_xlim(0, 1); a.set_ylim(bottom=0.0); a.grid(True, ls=":")
+    a.set_xlabel("rhot")
+    a.set_ylabel(r"$w/\!\int\! w\,$DVOL$\,d\rho_t$  [m$^{-3}$]")
+    a.set_title("Detector-coupling weight (normalized)")
     if los_det is not None:                        # real-LOS detector coupling
-        fd = np.asarray(los_det["f_det"])
-        fdn = fd / np.nanmax(fd) if np.nanmax(fd) > 0 else fd
-        a.plot(xs, fdn, "m--", lw=1.4, label="f_det (real LOS, norm.)")
+        fdn = normalized_coupling_weight(los_det["f_det"], dvol, xs)
+        a.plot(xs, fdn, "m--", lw=1.4, label="f_det (real LOS)")
         rc = los_det.get("rhot_crit")
         if rc is not None and np.isfinite(rc):
             a.axvline(rc, color="c", ls=":", lw=1.0,
                       label=f"rhot_crit={rc:.3f}")
-        a.legend(fontsize=8)
-
-    a = ax[1, 1]                                   # per-shell LOS rate eps*f*DVOL
-    a.plot(xs, wp["shell_th"], "r-", lw=1.4, label=r"TH$\cdot f\cdot$DVOL")
-    a.plot(xs, wp["shell_bt"], "b-", lw=1.4, label=r"BT$\cdot f\cdot$DVOL")
-    a.set_xlim(0, 1); a.grid(True, ls=":")
-    a.set_xlabel("rhot"); a.set_ylabel("per-shell LOS rate [n/s]")
-    a.set_title("LOS contribution per flux shell")
     a.legend(fontsize=8)
 
-    a = ax[1, 2]                                   # local TH/BT(rhot)
-    a.plot(xs, wp["ratio_local"], "m-", lw=1.4)
-    a.axhline(th_los / bt_los, color="k", ls="--", lw=0.9,
-              label=f"(TH/BT)_LOS={th_los/bt_los:.3f}")
-    a.set_xlim(0, 1); a.grid(True, ls=":")
-    a.set_xlabel("rhot"); a.set_ylabel("TH/BT (local)")
-    a.set_title(r"Local ratio  TH$(\rho_t)$/BT$(\rho_t)$")
-    a.legend(fontsize=8)
-
-    a = ax[1, 3]                                   # cumulative TH/BT(rhot)
+    a = ax[1]                                      # (1) TH/BT vs rhot
     a.plot(xs, wp["ratio_cum"], "c-", lw=1.6,
-           label=f"LOS geometric (rhot=1: {wp['ratio_cum'][-1]:.3f})")
+           label=f"cum. LOS geometric (rhot=1: {wp['ratio_cum'][-1]:.3f})")
     if los_det is not None:                        # real-LOS C(etendue)-weighted
         a.plot(xs, los_det["ratio_cum_det"], "m-", lw=1.8,
-               label=f"real LOS C-weighted (rhot=1: {los_det['thbt_det']:.3f})")
+               label=f"cum. real LOS C-weighted (rhot=1: {los_det['thbt_det']:.3f})")
     a.plot(xs, wp["ratio_cum_plasma"], color="0.35", ls="--", lw=1.4,
-           label=f"TRANSP full plasma (rhot=1: {wp['ratio_cum_plasma'][-1]:.3f})")
+           label=f"cum. TRANSP full plasma (rhot=1: {wp['ratio_cum_plasma'][-1]:.3f})")
+    a.plot(xs, wp["ratio_local"], color="0.6", lw=1.0, alpha=0.8,
+           label=r"local TH$(\rho_t)$/BT$(\rho_t)$")
+    a.axhline(th_los / bt_los, color="k", ls=":", lw=0.9,
+              label=f"(TH/BT)_LOS={th_los/bt_los:.3f}")
     a.set_xlim(0, 1); a.grid(True, ls=":")
-    a.set_xlabel("rhot")
-    a.set_ylabel(r"$\sum$TH$\,$DVOL / $\sum$BT$\,$DVOL  ($\times f$: LOS)")
-    a.set_title("Cumulative TH/BT  (LOS vs full plasma)")
+    a.set_xlabel("rhot"); a.set_ylabel("TH/BT")
+    a.set_title("TH/BT vs rhot  (cumulative & local)")
+    a.legend(fontsize=8)
+
+    a = ax[2]                                      # (2) per-shell detector signal
+    a.plot(xs, wp["shell_th"], "r-", lw=1.4, label=r"TH$\cdot f\cdot$DVOL")
+    a.plot(xs, wp["shell_bt"], "b-", lw=1.4, label=r"BT$\cdot f\cdot$DVOL")
+    a.fill_between(xs, 0.0, wp["shell_th"], color="r", alpha=0.10)
+    a.fill_between(xs, 0.0, wp["shell_bt"], color="b", alpha=0.10)
+    a.set_xlim(0, 1); a.set_ylim(bottom=0.0); a.grid(True, ls=":")
+    a.set_xlabel("rhot"); a.set_ylabel("per-shell LOS rate [n/s]")
+    a.set_title("Per-shell detector signal")
     a.legend(fontsize=8)
 
     fig.suptitle(f"{run_id} idx{idx}  KM14 LOS TH/BT  {chan_label}")
     fig.tight_layout()
 
-    # ---- second figure: effective per-shell weights vs rhot ----
+    if not diagnostic:
+        if save:
+            fig.savefig(save, dpi=130); print(f"\nSaved plot to {save}")
+        else:
+            plt.show()
+        return
+
+    # ---- second figure (--diagnostic-plot): effective per-shell weights ----
     # Left panel: each weight (f*DVOL, f_det*DVOL, DVOL) normalized to a true
     # PDF in rhot (divided by its trapezoidal integral over [0, 1] so the area
     # under the curve is 1) -- shows where in rhot each weight concentrates.

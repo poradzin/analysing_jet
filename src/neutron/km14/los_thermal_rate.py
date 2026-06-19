@@ -90,6 +90,7 @@ from los_common import (
     find_rho_bnd,
     los_shell_fraction,
     los_file_detector_rate,
+    normalized_coupling_weight,
 )
 
 
@@ -189,7 +190,14 @@ def parse_args(argv=None):
                              'response profile are computed from the actual '
                              'cells, in addition to the idealised-chord box.')
     parser.add_argument('--plot', action='store_true',
-                        help='Show diagnostic plots.')
+                        help='Show the radial-analysis diagnostic figure '
+                             '(emissivity profiles, LOS weight function, '
+                             'R-integrated emissivity vs Z).')
+    parser.add_argument('--plot-los', action='store_true',
+                        help='Show the LOS geometry figure: rhot(R,Z) and '
+                             'THNTX(R,Z) maps and the poloidal cross-section '
+                             'with the simplified box (and the real LOS cells '
+                             'when --los-file is given).')
     parser.add_argument('--save', action='store_true',
                         help='Save (rhot, THNTX, THKM14, f) profile to tmp/.')
     parser.add_argument('--no-subgrid', action='store_true',
@@ -263,20 +271,24 @@ def toroidal_rate(thntx_grid_si, R, Z, mask=None):
 
 
 # -----------------------------------------------------------------------------
-# Diagnostics
+# LOS geometry views  (--plot-los; mirrors km9/plot_LoS.py)
 # -----------------------------------------------------------------------------
-def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
-                     Rb, Zb, native, pulse, runid, time_jet, t_eq_jet,
-                     eq_label, chan_label, Rmag, Zmag, rho_bnd=None,
-                     xs=None, thntx_si_prof=None,
-                     thkm14_si_prof=None, f_prof=None, losf=None):
-    """Six-panel (2x3) diagnostic:
-        (0,0) rhot(R,Z) in LOS region + LCFS + rho_bnd
-        (0,1) THNTX(R,Z) in LOS region + LCFS + rho_bnd
-        (0,2) THNTX(rhot) and THKM14(rhot) profiles
-        (1,0) Full poloidal LCFS with LOS box and rho_bnd surface
-        (1,1) R-integrated emissivity vs Z
-        (1,2) LOS weight function f(rhot)
+def los_geometry_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
+                       Rb, Zb, native, pulse, runid, time_jet, t_eq_jet,
+                       eq_label, chan_label, Rmag, Zmag, rho_bnd=None,
+                       losf=None):
+    """KM14 line-of-sight geometry figure (1x3), shown with ``--plot-los``.
+
+    Mirrors the KM9 ``plot_LoS.py`` split: this figure holds the *spatial*
+    (R, Z) views of where the chord sits, while ``diagnostic_plots`` (``--plot``)
+    holds the radial analysis. KM14 always has the **simplified box** geometry
+    (fixed R-band x full Z, equivalent ``rho_bnd`` surface); when ``--los-file``
+    is given the **real LOS** cell footprint (coloured by etendue C) is overlaid
+    so the two geometries can be compared side by side.
+
+        (0) rhot(R, Z) on the LOS grid + LCFS + rho_bnd
+        (1) THNTX(R, Z) inside the LOS box + LCFS + rho_bnd
+        (2) Poloidal cross-section: LCFS + simplified box [+ real LOS cells]
     """
     Rg, Zg = np.meshgrid(R, Z, indexing='ij')
     rhot_plot = np.where(inside, rhot, np.nan)
@@ -287,14 +299,14 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                    if rho_bnd is not None and np.isfinite(rho_bnd)
                    else 'rho_bnd: N/A')
 
-    fig, axes = plt.subplots(2, 3, figsize=(17.0, 10.0))
+    fig, axes = plt.subplots(1, 3, figsize=(18.0, 5.8))
     fig.suptitle(
-        f'KM14 LOS thermal-neutron rate  -  pulse {pulse}  TRANSP {runid}  '
-        f'{chan_label}\n'
+        f'KM14 LOS geometry  -  pulse {pulse}  TRANSP {runid}  {chan_label}\n'
         f't_JET={time_jet:.3f}s  t_EQ={t_eq_jet:.3f}s  ({eq_label})'
     )
 
-    ax1 = axes[0, 0]
+    # ---- (0) rhot on the LOS grid ---------------------------------------
+    ax1 = axes[0]
     pc1 = ax1.pcolormesh(Rg, Zg, rhot_plot, shading='auto', cmap='viridis')
     fig.colorbar(pc1, ax=ax1, label='rhot')
     ax1.plot(Rb, Zb, 'w-', lw=1.2, label='LCFS')
@@ -313,7 +325,8 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax1.legend(loc='upper right', fontsize=8)
     ax1.set_aspect('equal', adjustable='box')
 
-    ax2 = axes[0, 1]
+    # ---- (1) THNTX on the LOS grid --------------------------------------
+    ax2 = axes[1]
     pc2 = ax2.pcolormesh(Rg, Zg, thntx_grid_si, shading='auto', cmap='inferno')
     fig.colorbar(pc2, ax=ax2, label='THNTX [n/m3/s]')
     ax2.plot(Rb, Zb, 'c-', lw=1.2, label='LCFS')
@@ -329,7 +342,8 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax2.legend(loc='upper right', fontsize=8)
     ax2.set_aspect('equal', adjustable='box')
 
-    ax3 = axes[1, 0]
+    # ---- (2) poloidal cross-section: simplified box [+ real LOS cells] --
+    ax3 = axes[2]
     ax3.plot(Rb, Zb, 'b-', lw=1.4, label='LCFS')
     # Real KM14 LOS cells (when --los-file given): scatter the actual footprint
     # coloured by etendue C (detector sensitivity), to compare against the
@@ -369,17 +383,35 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
     ax3.grid(True, ls=':', lw=0.5)
     ax3.set_aspect('equal', adjustable='box')
 
-    ax4 = axes[1, 1]
-    ax4.plot(inner_R, Z, lw=1.4)
-    ax4.set_xlabel(r'$\int$ THNTX dR  [n/m2/s]')
-    ax4.set_ylabel('Z [m]')
-    ax4.set_title('R-integrated emissivity vs Z')
-    ax4.axhline(Zmag, color='r', ls='--', lw=0.8, label=f'Zmag={Zmag:.3f} m')
-    ax4.grid(True, ls=':', lw=0.5)
-    ax4.legend(loc='best', fontsize=8)
+    plt.tight_layout()
+    plt.show()
+    return fig
 
-    # ---- (0, 2): emissivity profiles --------------------------------
-    ax5 = axes[0, 2]
+
+# -----------------------------------------------------------------------------
+# Diagnostics  (--plot; radial analysis. LOS geometry lives in
+#  los_geometry_plots / --plot-los, mirroring km9.)
+# -----------------------------------------------------------------------------
+def diagnostic_plots(Z, inner_R, pulse, runid, time_jet, t_eq_jet,
+                     eq_label, chan_label, Zmag, rho_bnd=None,
+                     xs=None, thntx_si_prof=None,
+                     thkm14_si_prof=None, f_prof=None, losf=None,
+                     dvol_m3=None):
+    """KM14 radial-analysis diagnostic (1x3; geometry panels are in
+    ``los_geometry_plots``, shown with ``--plot-los``):
+        (0) THNTX(rhot) and THKM14(rhot) emissivity profiles
+        (1) LOS weight function f(rhot) [+ f_det when --los-file]
+        (2) R-integrated emissivity vs Z
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(18.0, 5.8))
+    fig.suptitle(
+        f'KM14 LOS thermal-neutron rate  -  pulse {pulse}  TRANSP {runid}  '
+        f'{chan_label}\n'
+        f't_JET={time_jet:.3f}s  t_EQ={t_eq_jet:.3f}s  ({eq_label})'
+    )
+
+    # ---- (0) emissivity profiles ----------------------------------------
+    ax5 = axes[0]
     if xs is not None and thntx_si_prof is not None:
         ax5.plot(xs, thntx_si_prof, 'b-', lw=1.4,
                  label='THNTX (TRANSP)')
@@ -404,23 +436,26 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
         ax5.grid(True, ls=':', lw=0.5)
         ax5.legend(loc='upper right', fontsize=8)
 
-    # ---- (1, 2): LOS weight function f(rhot) ------------------------
-    ax6 = axes[1, 2]
-    if xs is not None and f_prof is not None:
-        ax6.plot(xs, f_prof, 'g-', lw=1.4, label='f (box, geometric)')
-        ax6.fill_between(xs, 0.0, f_prof, color='g', alpha=0.15)
+    # ---- (1) LOS weight function f(rhot) --------------------------------
+    # Each coupling weight is normalized by int(w*DVOL drhot) so that
+    # int(w_norm*DVOL)=1: this pins the arbitrary etendue scale to a common
+    # convention so KM9 and KM14 f_det are directly comparable on one axis (and
+    # any LOS rate ratio is unchanged, since the constant cancels). See
+    # los_common.normalized_coupling_weight.
+    ax6 = axes[1]
+    if xs is not None and f_prof is not None and dvol_m3 is not None:
+        fn = normalized_coupling_weight(f_prof, dvol_m3, xs)
+        ax6.plot(xs, fn, 'g-', lw=1.4, label='f (box, geometric)')
+        ax6.fill_between(xs, 0.0, fn, color='g', alpha=0.15)
         ax6.set_xlabel('rhot')
-        ax6.set_ylabel(r'$f(\rho_t)$ = LOS shell fraction')
-        ax6.set_title('LOS weight function')
+        ax6.set_ylabel(r'$w/\!\int\! w\,$DVOL$\,d\rho_t$  [m$^{-3}$]')
+        ax6.set_title('Detector-coupling weight (normalized)')
         if rho_bnd is not None and np.isfinite(rho_bnd):
             ax6.axvline(rho_bnd, color='m', ls=':', lw=1.0,
                         label=f'rho_bnd = {rho_bnd:.4f}')
         if losf is not None:
-            # Detector-coupling weight, normalised to its own peak so its shape
-            # overlays the [0,1] geometric f on the same axis.
-            fd = np.asarray(losf['f_det'])
-            fdn = fd / np.nanmax(fd) if np.nanmax(fd) > 0 else fd
-            ax6.plot(xs, fdn, 'm--', lw=1.4, label='f_det (real LOS, norm.)')
+            fdn = normalized_coupling_weight(losf['f_det'], dvol_m3, xs)
+            ax6.plot(xs, fdn, 'm--', lw=1.4, label='f_det (real LOS)')
             rc = losf.get('rhot_crit')
             if rc is not None and np.isfinite(rc):
                 ax6.axvline(rc, color='c', ls=':', lw=1.0,
@@ -430,8 +465,18 @@ def diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si, inner_R,
                             label=f'rho_50 = {losf["rho_med"]:.4f}')
         ax6.legend(loc='best', fontsize=8)
         ax6.set_xlim(0.0, 1.0)
-        ax6.set_ylim(0.0, 1.05)
+        ax6.set_ylim(bottom=0.0)
         ax6.grid(True, ls=':', lw=0.5)
+
+    # ---- (2) R-integrated emissivity vs Z -------------------------------
+    ax4 = axes[2]
+    ax4.plot(inner_R, Z, lw=1.4)
+    ax4.set_xlabel(r'$\int$ THNTX dR  [n/m2/s]')
+    ax4.set_ylabel('Z [m]')
+    ax4.set_title('R-integrated emissivity vs Z')
+    ax4.axhline(Zmag, color='r', ls='--', lw=0.8, label=f'Zmag={Zmag:.3f} m')
+    ax4.grid(True, ls=':', lw=0.5)
+    ax4.legend(loc='best', fontsize=8)
 
     plt.tight_layout()
     plt.show()
@@ -701,16 +746,21 @@ def main(argv=None):
         )
         print(f'Saved LOS profile to {out_path}')
 
+    if args.plot_los:
+        los_geometry_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
+                           Rb, Zb, eqs.native_rhot(),
+                           args.pulse, args.runid, time_jet, eqs.t_eq_jet,
+                           eqs.label, chan_label, Rmag, Zmag,
+                           rho_bnd=rho_bnd, losf=losf)
     if args.plot:
-        diagnostic_plots(R, Z, rhot, inside, psin_dense, thntx_grid_si,
-                         inner_R, Rb, Zb, eqs.native_rhot(),
+        diagnostic_plots(Z, inner_R,
                          args.pulse, args.runid, time_jet, eqs.t_eq_jet,
-                         eqs.label, chan_label, Rmag, Zmag,
+                         eqs.label, chan_label, Zmag,
                          rho_bnd=rho_bnd,
                          xs=xs_sorted,
                          thntx_si_prof=thntx_si_profile,
                          thkm14_si_prof=thkm14_si_profile,
-                         f_prof=f_profile, losf=losf)
+                         f_prof=f_profile, losf=losf, dvol_m3=dvol_m3)
 
     return 0
 

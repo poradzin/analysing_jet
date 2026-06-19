@@ -71,6 +71,7 @@ from los_common import (
     interp_flux_to,
     EqCDF,
     los_file_detector_rate,
+    normalized_coupling_weight,
 )
 import bt_zone_integrator as bzi
 
@@ -157,14 +158,20 @@ def diagnostic_plots(res, save=None):
     )
 
     # ---- (0) f_det --------------------------------------------------------
+    # Normalize by int(f_det*DVOL drhot) so int(f_det_norm*DVOL)=1: pins the
+    # arbitrary etendue scale to a common convention so KM9 and KM14 f_det are
+    # directly comparable; TH/BT is unchanged (the constant cancels in the
+    # ratio). See los_common.normalized_coupling_weight.
     ax = axes[0]
-    ax.plot(xs, res['f_det'], 'm-', lw=1.4, label='f_det (real LOS)')
-    ax.fill_between(xs, 0.0, res['f_det'], color='m', alpha=0.15)
+    fdn = normalized_coupling_weight(res['f_det'], res['dvol_m3'], xs)
+    ax.plot(xs, fdn, 'm-', lw=1.4, label='f_det (real LOS)')
+    ax.fill_between(xs, 0.0, fdn, color='m', alpha=0.15)
     if res['rhot_min'] is not None and np.isfinite(res['rhot_min']):
         ax.axvline(res['rhot_min'], color='c', ls=':', lw=1.0,
                    label=f'min sampled rhot (resolution floor) = {res["rhot_min"]:.4f}')
-    ax.set_xlabel('rhot'); ax.set_ylabel(r'$f_{det}=C_{bin}/DVOL$')
-    ax.set_title('Detector-coupling weight'); ax.set_xlim(0, 1)
+    ax.set_xlabel('rhot')
+    ax.set_ylabel(r'$f_{det}/\!\int\! f_{det}\,$DVOL$\,d\rho_t$  [m$^{-3}$]')
+    ax.set_title('Detector-coupling weight (normalized)'); ax.set_xlim(0, 1)
     ax.grid(True, ls=':', lw=0.5); ax.legend(loc='best', fontsize=8)
 
     # ---- (1) TH/BT vs rhot -----------------------------------------------
@@ -318,7 +325,7 @@ def main(argv=None):
     res = dict(
         pulse=args.pulse, runid=args.runid, idx=idx, chan_label=chan_label,
         t_transp=fi["time"], t_eq_jet=eqs.t_eq_jet, eq_label=eqs.label,
-        xs=xs, f_det=f_det, rhot_min=fTH['rhot_min'],
+        xs=xs, f_det=f_det, dvol_m3=dvol_m3, rhot_min=fTH['rhot_min'],
         ratio_local=ratio_local, ratio_cum_det=ratio_cum_det,
         ratio_cum_plasma=ratio_cum_plasma,
         shell_th_det=shell_th_det, shell_bt_det=shell_bt_det,

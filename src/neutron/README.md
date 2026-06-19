@@ -63,8 +63,8 @@ TIME3 slices (see "time-window averaging" below).
 | `bt_zone_integrator.py` | Per-zone 4π beam-target reactivity; acceptance-tested against NUBEAM `BTN4`/`BTN1` (≈1.00). |
 | `bt_los_emissivity.py` | Direction-resolved BT emissivity `dε/dΩ(n̂)`; KM14 anisotropy factor g≈1.00. Self-test: `--test`. |
 | `bt_poloidal_distribution.py` | Spatial poloidal-angle map of BT emissivity (step 1; standalone CDF reader). |
-| `los_thermal_rate.py` | KM14 thermal LOS rate, equivalent `rho_bnd`, `THKM14(rhot)` weight, real-cell `f_det` (`--los-file`). |
-| `los_th_bt_ratio.py` | KM14 LOS TH/BT ratio (`--channel total\|dd\|dt`, `--bt-mode flux\|zone`, `--bt-aniso`). |
+| `los_thermal_rate.py` | KM14 thermal LOS rate, equivalent `rho_bnd`, `THKM14(rhot)` weight, real-cell `f_det` (`--los-file`). `--plot` = radial analysis; `--plot-los` = LOS geometry (simplified box + real cells). |
+| `los_th_bt_ratio.py` | KM14 LOS TH/BT ratio (`--channel total\|dd\|dt`, `--bt-mode flux\|zone`, `--bt-aniso`). `--plot` = radial analysis; `--plot-los` = LOS geometry (R,Z emissivity/ratio maps + real cells). |
 | `km14_spectrum.py` | KM14 diamond neutron-spectrum forward model (TH + B-th DT), overlaid on the measured spectrum; χ²/fit. |
 | `extract_km14_png.py` | Extract curves + data points/error bars from the published Nocente PNG. |
 | `estimate_outer_th_fraction.py` | Early geometric outer-fraction estimate — **superseded** by `los_thermal_rate.py`; kept for reference. |
@@ -92,8 +92,8 @@ python bt_los_emissivity.py --test
 python bt_los_emissivity.py 104614 M30 --idx 1 --plot
 
 # 3. The deliverables
-python los_thermal_rate.py 104614 M29 -t 53.5268 --channel total --los-file _KM3.los
-python los_th_bt_ratio.py 104614 M29 --idx 2 --plot
+python los_thermal_rate.py 104614 M29 -t 53.5268 --channel total --los-file KM3.los --plot --plot-los
+python los_th_bt_ratio.py 104614 M29 --idx 2 --plot --plot-los
 python km14_spectrum.py   104614 M29 --idx 1 --include-scatt
 
 # KM9

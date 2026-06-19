@@ -161,21 +161,42 @@ python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --idx 1 --channel dd # DD-
 python src/neutron/km14/los_th_bt_ratio.py 104614 M30 --bt-mode zone
 python src/neutron/km14/los_th_bt_ratio.py 104614 M29 --idx 1 --channel dd --bt-aniso  # finite-height BT view
 ```
-Flags: `--idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --save --no-plot`
+Flags: `--idx --data-dir --channel {total,dd,dt} --bt-mode {flux,zone} --Rmin --Rmax --wtor --nR --nZ --plot --plot-los --diagnostic-plot --save --no-plot`
 plus (anisotropy) `--bt-aniso --detector-R --detector-height --cone-deg --nsamp --fast-norm {bdens,ntot} --no-rotation --seed`.
-Plot (2×4): top row eps_TH(R,Z), eps_BT(R,Z), local TH/BT, R-integrated vs Z;
-bottom row (commit 3c) `f(rhot)`, per-shell LOS rate `eps·f·DVOL`, local
-`TH/BT(rhot)`, cumulative `TH/BT(rhot)`. The cumulative panel overlays the
-LOS-weighted curve (cyan, → `(TH/BT)_LOS` at rhot=1) and a dashed TRANSP
-full-plasma reference `cumΣ(TH·DVOL)/cumΣ(BT·DVOL)` (no `f`, → whole-plasma 0D
-ratio at rhot=1) so the LOS-narrowing reweighting is read off directly.
-The local-TH/BT (R,Z) map masks near-LCFS cells where BT→0 and clips the colour
-scale to the 2–98th percentile (else edge spikes wash it to one flat colour).
-`--save <png>` also writes the weight-profile `.txt` to `src/tmp/`.
+
+**Plot split (mirrors km9 / `los_thermal_rate.py`, since 2026-06-19).** The
+*spatial* (R, Z) maps and the *radial* (rhot) analysis live in separate figures
+behind separate flags:
+
+* `--plot-los` — **LOS geometry** (1×3): `eps_TH(R,Z)`, `eps_BT(R,Z)`, local
+  `TH/BT(R,Z)` over the chord grid. The simplified box-grid geometry is always
+  drawn; with `--los-file` the real LOS cell footprint (lime) is overlaid on the
+  local-TH/BT map so the simplified and real geometries can be compared. The
+  local-TH/BT map masks near-LCFS cells where BT→0 and clips the colour scale to
+  the 2–98th percentile (else edge spikes wash it to one flat colour).
+* `--plot` — **radial analysis** (1×3, laid out like the KM9 diagnostic):
+  (0) *Detector-coupling weight* — `f(rhot)` geometric [+ real-LOS `f_det`],
+  each **normalized** by `∫ w·DVOL dρ` so `∫ w_norm·DVOL dρ = 1` (units 1/m³).
+  This pins the arbitrary etendue scale to a common convention so the KM9 and
+  KM14 `f_det` are directly comparable; the TH/BT ratio is invariant under the
+  rescaling (it cancels), so nothing reported changes. See
+  `los_common.normalized_coupling_weight`;
+  (1) *TH/BT vs rhot* — the cumulative LOS-weighted ratio (cyan, → `(TH/BT)_LOS`
+  at rhot=1), the real-LOS C-weighted cumulative (magenta, with `--los-file`) and
+  a dashed TRANSP full-plasma reference `cumΣ(TH·DVOL)/cumΣ(BT·DVOL)` (no `f`, →
+  whole-plasma 0D ratio at rhot=1), with the local ratio `TH(ρ)/BT(ρ)` overlaid
+  so the LOS-narrowing reweighting is read off directly;
+  (2) *Per-shell detector signal* — per-shell LOS rate `TH·f·DVOL`, `BT·f·DVOL`.
+* `--diagnostic-plot` — adds the 1×3 effective-weights figure (see below).
+
+`--save <png>` writes every requested figure (`<png>` analysis, `<png>_los`
+geometry, and `<png>_weights` effective weights with `--diagnostic-plot`) plus
+the weight-profile `.txt` to `src/tmp/`; `--no-plot` suppresses all figures.
 
 ## Effective-weight figure & cumulative-ratio plateau (added 2026-06-18)
 
-`make_plot` now also produces a **second figure** (1×3) with the three
+With `--diagnostic-plot`, `make_plot` also produces a **second figure** (1×3)
+with the three
 weight PDFs and their action on TH/BT. Each weight (`DVOL`, `f·DVOL`,
 `f_det·DVOL`) is normalized to a *true* PDF in rhot — divided by its
 trapezoidal integral over [0, 1] so `∫₀¹ w(ρ) dρ = 1`. The three panels:
@@ -187,7 +208,8 @@ trapezoidal integral over [0, 1] so `∫₀¹ w(ρ) dρ = 1`. The three panels:
    same area-1 normalization.
 3. Same for BT.
 
-`--save` writes the figure to `<save>_weights.<ext>` next to the main PNG.
+With `--diagnostic-plot --save`, this figure is written to
+`<save>_weights.<ext>` next to the main PNG.
 
 **Why cumulative TH/BT is identical up to rhot ~ 0.26** (104614 M29 dd,
 observed across all three weightings). Inside `rhot_crit ≈ 0.12` the

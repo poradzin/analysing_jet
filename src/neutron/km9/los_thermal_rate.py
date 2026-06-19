@@ -79,6 +79,7 @@ from los_common import (
     EqCDF,
     EqPPF,
     los_file_detector_rate,
+    normalized_coupling_weight,
 )
 
 # Default real KM9 LOS cell file sits next to this script.
@@ -203,8 +204,11 @@ def diagnostic_plots(losf, xs, thntx_si_prof, dvol_m3,
     )
 
     # ---- (0) f_det(rhot) -------------------------------------------------
+    # Normalize by int(f_det*DVOL drhot) so int(f_det_norm*DVOL)=1: pins the
+    # arbitrary etendue scale to a common convention so KM9 and KM14 f_det are
+    # directly comparable. See los_common.normalized_coupling_weight.
     ax1 = axes[0]
-    fd = np.asarray(losf['f_det'])
+    fd = normalized_coupling_weight(losf['f_det'], dvol_m3, xs)
     ax1.plot(xs, fd, 'm-', lw=1.4, label='f_det (real LOS)')
     ax1.fill_between(xs, 0.0, fd, color='m', alpha=0.15)
     rmin = losf.get('rhot_min')
@@ -215,8 +219,8 @@ def diagnostic_plots(losf, xs, thntx_si_prof, dvol_m3,
         ax1.axvline(losf['rho_med'], color='k', ls='-.', lw=1.0,
                     label=f'rho_50 = {losf["rho_med"]:.4f}')
     ax1.set_xlabel('rhot')
-    ax1.set_ylabel(r'$f_{det}(\rho_t) = C_{bin}/DVOL$')
-    ax1.set_title('Detector-coupling weight')
+    ax1.set_ylabel(r'$f_{det}/\!\int\! f_{det}\,$DVOL$\,d\rho_t$  [m$^{-3}$]')
+    ax1.set_title('Detector-coupling weight (normalized)')
     ax1.set_xlim(0.0, 1.0)
     ax1.grid(True, ls=':', lw=0.5)
     ax1.legend(loc='best', fontsize=8)

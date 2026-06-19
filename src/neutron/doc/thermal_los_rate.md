@@ -425,12 +425,26 @@ python src/neutron/km14/los_thermal_rate.py 104614 M29 \
 Common flags: `--Rmin --Rmax --wtor --nR --nZ --zmargin --plot --save`.
 Also accepts the `key=value` form (`dda=eftp uid=gszepesi seq=405`).
 
-## Plot layout (2×3, with `--plot`)
+## Plot layout (two 1×3 figures, mirroring KM9)
 
-| | col 0 | col 1 | col 2 |
-|---|---|---|---|
-| row 0 | rhot(R,Z) in LOS box + LCFS + rho_bnd | THNTX(R,Z) in LOS box + LCFS + rho_bnd | THNTX & THKM14 vs rhot |
-| row 1 | Full poloidal LCFS with LOS box + rho_bnd surface | R-integrated emissivity vs Z | f(rhot) weight function |
+Following the KM9 split, the spatial **LOS geometry** views and the
+**radial analysis** views live in two separate figures, behind two flags:
+
+**`--plot-los` — LOS geometry (1×3):**
+
+| col 0 | col 1 | col 2 |
+|---|---|---|
+| rhot(R,Z) on LOS grid + LCFS + rho_bnd | THNTX(R,Z) in LOS box + LCFS + rho_bnd | poloidal cross-section: simplified box (+ real LOS cells when `--los-file`) |
+
+The simplified box geometry is always drawn; the real LOS cell footprint
+(coloured by etendue `C`) is overlaid in col 2 when `--los-file` is given,
+so the two geometries can be compared directly.
+
+**`--plot` — radial analysis (1×3):**
+
+| col 0 | col 1 | col 2 |
+|---|---|---|
+| THNTX & THKM14 vs rhot | f(rhot) weight function | R-integrated emissivity vs Z |
 
 ## Notable bugs found / pitfalls
 
@@ -567,8 +581,9 @@ LCFS; `Rate_chord=1.86e15`, `Rate_det=1.82e8 n/s` (closure 1.5e-4);
 solid-angle weighting pulls the effective radius **inward** (Ω largest
 looking straight up through the core), as expected. Runs <1 s.
 `--save` adds `f_det, THKM14_det` columns; `--plot` overlays the
-normalised `f_det` and `rho_50` on the weight/profile panels, and panel
-(1,0) scatters the real LOS cells (coloured by `log10 C` = etendue) over the
+normalised `f_det` and `rho_50` on the weight/profile panels, and the
+`--plot-los` poloidal panel scatters the real LOS cells (coloured by
+`log10 C` = etendue) over the
 simplified box rectangle. That panel shows the real LOS is a **slanted,
 narrow band** (tilts outboard with height; C peaks in a central strip and
 tapers at the footprint edges), not the vertical box — which is why `rho_50`

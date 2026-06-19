@@ -32,6 +32,13 @@ add more modules there as scripts are built):
 * **LOS rates.** `los_shell_fraction` (box-chord `f(rhot)` with the
   enclosed-shell `f=1` pin gated by `rmag`), `los_file_detector_rate`
   (real-cell `f_det(rhot)`, `Rate_det`, `rho_50`).
+* **Plot normalization.** `normalized_coupling_weight(w, dvol_m3, xs)` —
+  divides a coupling weight by `∫ w·DVOL dρ` so `∫ w_norm·DVOL dρ = 1`
+  (units 1/m³). Used by every "Detector-coupling weight" plot panel
+  (KM9 + KM14, both `los_thermal_rate` and `los_th_bt_ratio`) so the raw
+  etendue scale, which differs per diagnostic, is pinned to a common
+  convention and the KM9/KM14 `f_det` become directly comparable. The
+  TH/BT (and any LOS rate ratio) is invariant under the rescaling.
 
 What stays in `km14/los_thermal_rate.py` (~840 lines, down from 1395):
 the box-chord pipeline `build_rz_grid` / `integrate_rate` /

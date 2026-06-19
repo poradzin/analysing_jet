@@ -714,6 +714,26 @@ def find_rho_bnd(target, xs, cum_emis):
     return float(f_inv(target)), total
 
 
+def normalized_coupling_weight(weight, dvol_m3, xs):
+    """Normalize a per-shell LOS coupling weight ``w(rhot)`` for cross-diagnostic
+    comparison: divide by ``integral(w * DVOL d rhot)`` so that
+    ``integral(w_norm * DVOL d rhot) = 1``.
+
+    The detector-coupling weight ``f_det = C_bin / DVOL`` (and the geometric box
+    ``f``) carry an arbitrary *absolute* scale -- the detector etendue / solid
+    angle, which differs between KM9 and KM14 -- so their raw magnitudes are not
+    comparable across the two diagnostics. Every LOS-weighted rate *ratio*
+    (notably ``TH/BT = sum(TH*w*DVOL)/sum(BT*w*DVOL)``) is invariant under a
+    constant rescaling of ``w``, since the factor cancels between numerator and
+    denominator, so normalizing is free: it pins the scale to a common
+    convention without changing any reported ratio. Units of ``w_norm``: 1/m^3.
+    """
+    w = np.asarray(weight, dtype=float)
+    dv = np.asarray(dvol_m3, dtype=float)
+    norm = float(np.trapezoid(w * dv, np.asarray(xs, dtype=float)))
+    return w / norm if norm > 0 else w
+
+
 def _running_median3(a):
     """3-point running median; endpoints unchanged. Cosmetic de-speckle."""
     a = np.asarray(a, dtype=float)
