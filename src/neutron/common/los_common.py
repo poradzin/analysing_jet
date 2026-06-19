@@ -13,6 +13,11 @@ Public surface
 ~~~~~~~~~~~~~~
 I/O
     find_run_dir, read_time_grid, read_thermal_slice, read_los_file
+    read_scalar_totals                            -- 0D BTNTS_* totals
+    read_fbm_avg_window, resolve_time_selection   -- -t / --idx time handling
+
+Beam-target / flux profiles (los_th_bt_ratio scripts)
+    flux_avg_profile, interp_flux_to
 
 Equilibrium (rhot(R, Z) from a TRANSP CDF or a JET PPF)
     CdfEquilibrium  -- low-level psi(R,Z) -> rhot from the main CDF
@@ -83,21 +88,213 @@ def read_thermal_slice(cdf_path, th_var, trind):
     """Return (thntx, x_rhot, dvol, thntx_to_si, dvol_to_m3, units) at *trind*.
 
     Reads the chosen thermal emissivity profile (``th_var``: THNTX, THNTX_DD,
-    THNTX_DT, ...), the rhot grid X, and DVOL, all at TRANSP time index
-    ``trind``. Returns the CGS->SI conversion factors inferred from the CDF
-    units attributes.
+    THNTX_DT, ...), the rhot grid X, and DVOL. Returns the CGS->SI conversion
+    factors inferred from the CDF units attributes.
+
+    ``trind`` may be a single integer (one time slice) **or a sequence of
+    integers**, in which case the profiles ``THNTX``, ``X`` and ``DVOL`` are
+    **averaged element-wise across the requested time slices** (a straight,
+    unweighted mean over the TIME3 indices). The zone grids X and DVOL are
+    nearly time-stationary so averaging them is well defined; this implements
+    the time-window averaging requested by the ``-t t1 t2`` / ``--idx`` CLI
+    modes (see :func:`resolve_time_selection`).
+
+    NB: THNTX is a normal TIME3 output -- it is **not** in the run's ``SELAVG``
+    list, so TRANSP never applied its own ACFILE/``MTHDAVG`` averaging to it
+    (that governed only the fast-ion data ``FBM BMVOL ...`` written to
+    ``_fi``/``_neut``). The windowed mean here is our own construct, intended to
+    make the thermal profile time-consistent with the ``[OUTTIM-AVGTIM,
+    OUTTIM]`` window the fast-ion / BT data was averaged over. A plain TIME3
+    mean is the best achievable (THNTX is not stored on the heating-source
+    timestep grid ``MTHDAVG=2`` sampled); on a uniform TIME3 grid it equals the
+    trapezoidal time-average anyway.
     """
+    trinds = np.atleast_1d(np.asarray(trind, dtype=int))
     with Dataset(cdf_path, "r") as d:
         if th_var not in d.variables:
             raise KeyError(f"{th_var} not present in {cdf_path}")
-        thntx = np.array(d[th_var][trind])
-        x_rhot = np.array(d["X"][trind])
-        dvol = np.array(d["DVOL"][trind])
+        thntx = np.asarray(d[th_var][trinds]).mean(axis=0)
+        x_rhot = np.asarray(d["X"][trinds]).mean(axis=0)
+        dvol = np.asarray(d["DVOL"][trinds]).mean(axis=0)
         unit_th = getattr(d[th_var], "units", "") or ""
         unit_dv = getattr(d["DVOL"], "units", "") or ""
     thntx_to_si = 1.0e6 if 'CM' in unit_th.upper() else 1.0   # N/CM3/SEC -> n/m3/s
     dvol_to_m3 = 1.0e-6 if 'CM' in unit_dv.upper() else 1.0   # CM**3 -> m^3
     return thntx, x_rhot, dvol, thntx_to_si, dvol_to_m3, unit_th
+
+
+# ----------------------------------------------------------------------
+# Beam-target / flux-profile helpers (shared by the los_th_bt_ratio scripts)
+# ----------------------------------------------------------------------
+
+def read_scalar_totals(cdf_path, tind):
+    """0D beam-target neutron totals BTNTS_{DD,DT,TT,TD} [n/s] at time index tind."""
+    with Dataset(cdf_path, "r") as d:
+        out = {}
+        for k in ("BTNTS_DD", "BTNTS_DT", "BTNTS_TT", "BTNTS_TD"):
+            if k in d.variables:
+                out[k] = float(d[k][tind])
+    return out
+
+
+def flux_avg_profile(values_zone, x2d, bmvol):
+    """BMVOL-weighted flux-surface average of a per-zone NUBEAM quantity.
+
+    Returns ``(x_rows, profile)`` -- the unique x-row labels and the
+    volume-weighted average of ``values_zone`` over the poloidal zones in each
+    x-row (collapsing the NUBEAM (x-row, theta) zone grid to a 1-D flux profile).
+    """
+    xu = np.unique(x2d)
+    prof = np.array([np.sum(values_zone[x2d == xv] * bmvol[x2d == xv])
+                     / np.sum(bmvol[x2d == xv]) for xv in xu])
+    return xu, prof
+
+
+def interp_flux_to(x_src, y_src, x_dst):
+    """PCHIP a flux profile y_src(x_src) onto x_dst, padded to cover [0, 1].
+
+    rhot=0 takes the on-axis value, rhot=1 is forced to zero, points outside the
+    source support are set to 0 (never negative). Used to put a beam-target flux
+    profile on the same rhot grid as THNTX/DVOL.
+    """
+    order = np.argsort(x_src)
+    xs = np.asarray(x_src, float)[order]
+    ys = np.asarray(y_src, float)[order]
+    uniq = np.concatenate(([True], np.diff(xs) > 0))
+    xs, ys = xs[uniq], ys[uniq]
+    if xs[0] > 0.0:
+        xs = np.concatenate(([0.0], xs)); ys = np.concatenate(([ys[0]], ys))
+    if xs[-1] < 1.0:
+        xs = np.concatenate((xs, [1.0])); ys = np.concatenate((ys, [0.0]))
+    out = PchipInterpolator(xs, ys, extrapolate=False)(np.asarray(x_dst, float))
+    return np.clip(np.where(np.isnan(out), 0.0, out), 0.0, None)
+
+
+def read_fbm_avg_window(tr_dat_path, idx):
+    """Fast-ion output averaging window for output index *idx* from the namelist.
+
+    TRANSP writes ACFILE output (``<run>.DATA<idx>`` -> ``_fi_<idx>.cdf`` /
+    ``_neut_<idx>.cdf``) at the times ``OUTTIM(idx)`` listed in the run namelist
+    ``<pulse><runid>TR.DAT`` (group ``&ACFILE``). The variables named in
+    ``SELAVG`` (the fast-ion set ``FBM BMVOL BDENS2 EBA2PL EBA2PP``) are
+    averaged over the preceding ``AVGTIM`` seconds, i.e. the window is
+
+        [OUTTIM(idx) - AVGTIM,  OUTTIM(idx)]
+
+    (all in TRANSP seconds = JET time - 40). ``idx`` is 1-based to match the
+    Fortran ``OUTTIM(idx)`` indexing and the ``.DATA<idx>``/``_fi_<idx>.cdf``
+    file numbering. ``MTHDAVG`` selects how TRANSP sampled within that window
+    (1=heating-source timestep [default], 2=on each heating-source timestep
+    completion, 3=fixed ``AVGSAMP`` period); it governs the **fast-ion** average
+    only -- THNTX (thermal) is not in ``SELAVG`` and is unaffected (see
+    :func:`read_thermal_slice`). We reuse this window purely to average THNTX
+    consistently with the fast-ion snapshot.
+
+    Returns ``(t_lo, t_hi, t_out, avgtim, mthdavg)`` in TRANSP seconds, where
+    ``t_out = OUTTIM(idx)`` is the nominal output time (window upper bound).
+    """
+    import f90nml
+    nml = f90nml.read(str(tr_dat_path))
+    if 'acfile' not in nml:
+        raise KeyError(f"no &ACFILE group in {tr_dat_path}")
+    ac = nml['acfile']
+    outtim = ac.get('outtim')
+    avgtim = ac.get('avgtim')
+    if outtim is None or avgtim is None:
+        raise KeyError(f"OUTTIM/AVGTIM missing from &ACFILE in {tr_dat_path}")
+    outtim = np.atleast_1d(np.asarray(outtim, dtype=float))
+    if idx < 1 or idx > outtim.size:
+        raise IndexError(
+            f"--idx {idx} out of range: OUTTIM has {outtim.size} entries "
+            f"({outtim.tolist()})")
+    t_out = float(outtim[idx - 1])
+    avgtim = float(avgtim)
+    mthdavg = ac.get('mthdavg')
+    return t_out - avgtim, t_out, t_out, avgtim, mthdavg
+
+
+def resolve_time_selection(cdf_path, run_dir, run_id, times=None, idx=None):
+    """Resolve the ``-t`` / ``--idx`` CLI selection into slice indices + eq time.
+
+    Selection modes (mutually exclusive ``times`` vs ``idx``):
+
+    * ``idx`` (1-based) -- read ``[OUTTIM(idx)-AVGTIM, OUTTIM(idx)]`` from the
+      run namelist; average all TIME3 slices in that window; map the
+      equilibrium to the slice nearest ``OUTTIM(idx)`` (the window upper bound,
+      the nominal fast-ion output time).
+    * ``times = [t1, t2]`` (JET s) -- average all TIME3 slices in ``[t1, t2]``;
+      map the equilibrium to the **window midpoint** ``(t1+t2)/2``.
+    * ``times = [t1]`` -- snap to the single nearest TIME3 slice; equilibrium at
+      that slice.
+    * neither -- use the midpoint slice of the run.
+
+    All times are handled in the JET convention (TRANSP seconds + 40). If a
+    window encloses no TIME3 slice (narrower than the grid spacing) it falls
+    back to the single nearest slice to the window centre, with a warning.
+
+    Returns ``(trinds, eq_ref_jet, rep_jet, desc)``:
+        trinds      1-D int array of TIME3 indices to average over
+        eq_ref_jet  JET time the (single) equilibrium maps to [s]
+        rep_jet     representative time of the selection (filenames/titles) [s]
+        desc        human-readable description of the resolved selection
+    """
+    t_jet_grid = read_time_grid(cdf_path) + 40.0
+
+    def _nearest(t):
+        return int(np.abs(t_jet_grid - t).argmin())
+
+    def _window(lo_jet, hi_jet, centre_jet):
+        sel = np.where((t_jet_grid >= lo_jet) & (t_jet_grid <= hi_jet))[0]
+        if sel.size == 0:
+            j = _nearest(centre_jet)
+            print(f'  WARNING: window [{lo_jet:.4f}, {hi_jet:.4f}] s encloses '
+                  f'no TIME3 slice (dt~{np.median(np.diff(t_jet_grid)):.4f} s); '
+                  f'falling back to nearest slice [{j}] @ {t_jet_grid[j]:.4f} s.')
+            sel = np.array([j], dtype=int)
+        return sel
+
+    if idx is not None:
+        if times:
+            raise ValueError("--idx and -t are mutually exclusive")
+        tr_dat = Path(run_dir) / f"{run_id}TR.DAT"
+        if not tr_dat.exists():
+            raise FileNotFoundError(f"namelist not found: {tr_dat}")
+        t_lo, t_hi, t_out, avgtim, mthdavg = read_fbm_avg_window(tr_dat, idx)
+        lo_jet, hi_jet, out_jet = t_lo + 40.0, t_hi + 40.0, t_out + 40.0
+        trinds = _window(lo_jet, hi_jet, out_jet)
+        eq_ref_jet = float(t_jet_grid[_nearest(out_jet)])
+        desc = (
+            f'--idx {idx}: OUTTIM={t_out:.4f}s, AVGTIM={avgtim:.4f}s '
+            f'(fast-ion MTHDAVG={mthdavg}) -> TRANSP window '
+            f'[{t_lo:.4f}, {t_hi:.4f}]s (JET [{lo_jet:.4f}, {hi_jet:.4f}]s); '
+            f'mean of {trinds.size} TIME3 THNTX slice(s) over the same window; '
+            f'eq @ OUTTIM (JET {out_jet:.4f}s)'
+        )
+        return trinds, eq_ref_jet, out_jet, desc
+
+    if times and len(times) == 2:
+        t1, t2 = sorted(float(t) for t in times)
+        trinds = _window(t1, t2, 0.5 * (t1 + t2))
+        eq_ref_jet = float(t_jet_grid[_nearest(0.5 * (t1 + t2))])
+        rep = 0.5 * (t1 + t2)
+        desc = (
+            f'-t {t1:.4f} {t2:.4f} s: averaging {trinds.size} TIME3 slice(s) '
+            f'in [{t1:.4f}, {t2:.4f}]s; eq @ window midpoint (JET {rep:.4f}s)'
+        )
+        return trinds, eq_ref_jet, rep, desc
+
+    if times and len(times) == 1:
+        t1 = float(times[0])
+        j = _nearest(t1)
+        desc = (f'-t {t1:.4f} s: nearest TIME3 slice [{j}] @ '
+                f'{t_jet_grid[j]:.4f}s; eq @ same slice')
+        return np.array([j], dtype=int), float(t_jet_grid[j]), float(t_jet_grid[j]), desc
+
+    # No time supplied: midpoint of the run.
+    j = len(t_jet_grid) // 2
+    desc = (f'no time supplied: run-midpoint TIME3 slice [{j}] @ '
+            f'{t_jet_grid[j]:.4f}s')
+    return np.array([j], dtype=int), float(t_jet_grid[j]), float(t_jet_grid[j]), desc
 
 
 # ----------------------------------------------------------------------
@@ -527,6 +724,30 @@ def _running_median3(a):
     return out
 
 
+def _running_median(a, k=5):
+    """Centered k-point running median (k forced odd); cosmetic de-speckle.
+
+    Near the ends the window shrinks symmetrically so the first/last bins stay
+    put (no edge bias). For ``k == 3`` this matches :func:`_running_median3`.
+    Used to suppress the residual flux-shell aliasing wiggle in a horizontal
+    chord's ``f_det`` (a regular cell lattice beating against the rhot bins);
+    cosmetic only -- ``Rate_det`` is summed from the cells, not this profile.
+    """
+    a = np.asarray(a, dtype=float)
+    n = a.size
+    if k % 2 == 0:
+        k += 1
+    if n < 3 or k < 3:
+        return a.copy()
+    h = k // 2
+    out = a.copy()
+    for i in range(n):
+        w = min(h, i, n - 1 - i)          # symmetric, shrinking at the ends
+        if w > 0:
+            out[i] = np.median(a[i - w:i + w + 1])
+    return out
+
+
 def _subgrid_bin(rhot_c, half, weight, edges, density=None):
     """Anti-aliased binning: spread each sample over [rhot-half, rhot+half].
 
@@ -734,7 +955,7 @@ def los_shell_fraction(rhot_los, inside, R, Z, x_rhot, dvol_x_m3,
 
 def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
                            thntx_to_si, dvol_m3, subgrid=True,
-                           chord_kind="vertical"):
+                           chord_kind="vertical", median=True):
     """Thermal-neutron quantities from a real LOS cell cloud.
 
     Each cell carries its own volume ``V`` and etendue weight ``C`` (with
@@ -763,6 +984,13 @@ def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
     thntx_to_si : CGS->SI factor for THNTX
     dvol_m3     : TRANSP DVOL on ``xs_sorted`` in m^3
     subgrid     : anti-aliased binning of C, V across shells (default).
+    median      : apply the **cosmetic** running-median de-speckle of ``f_det``
+                  (default True): the 3-bin median outside ``rhot_crit`` for
+                  vertical chords and the 5-bin median on the crossed shells
+                  for horizontal chords. Set False to return the raw binned
+                  ``f_det`` (useful to estimate the median's effect). Purely
+                  cosmetic -- ``Rate_det``/``rho_50`` are summed from the cells
+                  and are identical either way.
     chord_kind  : ``"vertical"`` (KM14) / ``"horizontal"`` (KM9) / ``"auto"``.
                   Controls the **enclosed-shell flattening + outside median3**
                   of ``f_det``: only meaningful when the chord pierces the
@@ -775,15 +1003,22 @@ def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
                   ``median(|w|) > 0.9``, else horizontal. Default is
                   ``"vertical"`` to preserve historical KM14 behaviour
                   byte-for-byte; KM9 should pass ``"horizontal"`` or
-                  ``"auto"``.
+                  ``"auto"``. For non-vertical chords ``f_det`` is additionally
+                  zeroed on flux shells *entirely* below the chord's closest
+                  approach to the axis (``rhot_min``), which a grazing chord
+                  never crosses (see the inner-shell block below); vertical
+                  chords handle their core via ``rhot_crit`` flattening instead.
 
     Returns
     -------
     dict with keys
         rate_det, rate_chord, R_cells, Z_cells, C_cells, rhot_cells,
         inside_cells, eps_si, c_bin, v_bin, f_det, thkm14_det_si,
-        rate_from_profile, cum_rhot, cum_frac, rho_med, rhot_crit, vol_tot,
-        c_tot, n_inside.
+        rate_from_profile, cum_rhot, cum_frac, rho_med, rhot_crit, rhot_min,
+        vol_tot, c_tot, n_inside.
+
+    ``rhot_min`` is the chord's closest-approach rhot (set for non-vertical
+    chords; ``None`` for vertical, which use ``rhot_crit``).
 
     NB the ``thkm14_det_si`` key name is preserved for backward
     compatibility; conceptually it is now ``THLOS_det`` for any diagnostic.
@@ -813,6 +1048,7 @@ def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
     edges = np.concatenate(([0.0], 0.5 * (xs_sorted[:-1] + xs_sorted[1:]), [1.0]))
     w_in = inside_c.astype(float)
     rhot_crit = None
+    rhot_min = None
     if not subgrid:
         c_bin, _ = np.histogram(rhot_c, bins=edges, weights=C * w_in)
         v_bin, _ = np.histogram(rhot_c, bins=edges, weights=V * w_in)
@@ -860,6 +1096,34 @@ def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
             if cols.size:
                 rhot_crit = float(cols.min())
 
+    # Un-crossed inner shells (non-vertical / grazing chords only). A vertical
+    # pencil chord (KM14) geometrically *encloses* the innermost flux shells
+    # even when no discrete cell centre lands there, so its core is handled by
+    # the enclosed-shell flattening below (rhot_crit). A horizontal / grazing
+    # chord (KM9) instead has a finite closest approach to the magnetic axis:
+    # its minimum sampled rhot is rhot_min = min rhot over in-LCFS cells, and
+    # flux shells *entirely* below rhot_min are never crossed -> no thermal
+    # emission from them reaches the detector, so f_det there must be exactly
+    # zero. The DVOL-weighted subgrid splat otherwise leaks a little C into
+    # those bins through the symmetric cell tails (a spurious near-axis shelf
+    # at ~half the plateau). Zero those bins and fold their leaked C into the
+    # first crossed bin so Rate_det closure (total C) is preserved. The first
+    # *partially* crossed bin (which straddles rhot_min) keeps its reduced
+    # value, giving an honest roll-up from the closest-approach radius.
+    if chord_kind != "vertical":
+        keep_in = inside_c & (C > 0.0)
+        if keep_in.any():
+            rhot_min = float(rhot_c[keep_in].min())
+            below = edges[1:] <= rhot_min      # bins entirely below the chord
+            if below.any() and not below.all():
+                first = int(np.argmax(~below))  # first bin not fully below
+                c_bin = c_bin.copy()
+                v_bin = v_bin.copy()
+                c_bin[first] += c_bin[below].sum()
+                v_bin[first] += v_bin[below].sum()
+                c_bin[below] = 0.0
+                v_bin[below] = 0.0
+
     with np.errstate(invalid="ignore", divide="ignore"):
         f_det = np.where(dvol_m3 > 0.0, c_bin / dvol_m3, 0.0)
 
@@ -884,9 +1148,22 @@ def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
         # survives; the flat enclosed plateau is left untouched). Cosmetic --
         # Rate_det (= sum eps*C) is computed directly from the cells and is
         # unchanged.
-        if subgrid:
+        if subgrid and median:
             outside = edges[1:] > rhot_crit
             f_det = np.where(outside, _running_median3(f_det), f_det)
+    elif subgrid and median and chord_kind != "vertical":
+        # Horizontal / grazing chord: no enclosed plateau, but the regular cell
+        # lattice (uniform z-slices x regular along-chord steps) beats against
+        # the curved flux shells, leaving a quasi-periodic ~15% wiggle that the
+        # subgrid splat alone cannot remove (widening the splat is non-monotonic
+        # -- a classic aliasing beat, not under-smearing). Apply a 5-bin running
+        # median as a cosmetic de-speckle on the *crossed* shells only (above
+        # rhot_min), so the zeroed un-crossed core is untouched. Rate_det
+        # (= sum eps*C) is summed from the cells directly and is unchanged.
+        idx = np.where(edges[1:] > (rhot_min if rhot_min is not None else 0.0))[0]
+        if idx.size >= 3:
+            f_det = f_det.copy()
+            f_det[idx] = _running_median(f_det[idx], 5)
 
     thntx_si = thntx_sorted * thntx_to_si
     thkm14_det_si = thntx_si * f_det
@@ -919,6 +1196,7 @@ def los_file_detector_rate(cells, eqs, xs_sorted, thntx_sorted,
         "cum_frac": cum_frac,
         "rho_med": rho_med,
         "rhot_crit": rhot_crit,
+        "rhot_min": rhot_min,
         "vol_tot": float(np.sum(V * w_in)),
         "c_tot": float(np.sum(C * w_in)),
         "n_inside": int(np.count_nonzero(inside_c)),

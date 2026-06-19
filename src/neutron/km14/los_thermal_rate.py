@@ -81,9 +81,9 @@ if _COMMON_DIR not in sys.path:
 
 from los_common import (
     find_run_dir,
-    read_time_grid,
     read_thermal_slice,
     read_los_file,
+    resolve_time_selection,
     EqCDF,
     EqPPF,
     thntx_on_grid,
@@ -154,9 +154,20 @@ def parse_args(argv=None):
                         help='[ppf mode] Equilibrium PPF UID (default: jetppf)')
     parser.add_argument('--seq', type=int, default=0,
                         help='[ppf mode] Equilibrium PPF sequence (default: 0)')
-    parser.add_argument('-t', '--time', type=float, default=None,
-                        help='Time in JET convention (s, t>40). '
-                             'If omitted, the midpoint of the TRANSP run is used.')
+    parser.add_argument('-t', '--time', type=float, nargs='+', default=None,
+                        metavar='T',
+                        help='Time in JET convention (s, t>40). One value: '
+                             'snap to the nearest TRANSP output slice. Two '
+                             'values t1 t2: average the TRANSP signals over '
+                             '[t1, t2] (eq mapped to the window midpoint). '
+                             'If omitted, the run midpoint is used. Mutually '
+                             'exclusive with --idx.')
+    parser.add_argument('--idx', type=int, default=None,
+                        help='Fast-ion output index (1-based, as in '
+                             '_fi_<idx>.cdf). Averages the TRANSP signals over '
+                             'the namelist window [OUTTIM(idx)-AVGTIM, '
+                             'OUTTIM(idx)] and maps the equilibrium to '
+                             'OUTTIM(idx). Mutually exclusive with -t.')
     parser.add_argument('--Rmin', type=float, default=R_MIN_DEFAULT,
                         help=f'LOS inner R [m] (default {R_MIN_DEFAULT})')
     parser.add_argument('--Rmax', type=float, default=R_MAX_DEFAULT,
@@ -185,7 +196,17 @@ def parse_args(argv=None):
                         help='Disable subgrid (R,Z)-cell rhot distribution '
                              'for f(rhot); use point binning instead. '
                              'Subgrid is on by default to suppress aliasing.')
-    return parser.parse_args(argv)
+    parser.add_argument('--no-median', action='store_true',
+                        help='Disable the cosmetic running-median de-speckle of '
+                             'the real-LOS f_det (--los-file); show raw f_det. '
+                             'Rate_det/rho_50 are unchanged either way.')
+    args = parser.parse_args(argv)
+    if args.time is not None and len(args.time) not in (1, 2):
+        parser.error('-t/--time takes 1 value (nearest slice) or 2 values '
+                     '(t1 t2 averaging window)')
+    if args.time is not None and args.idx is not None:
+        parser.error('-t/--time and --idx are mutually exclusive')
+    return args
 
 
 # (read_time_grid / read_thermal_slice / read_los_file / equilibrium classes
@@ -429,33 +450,29 @@ def main(argv=None):
     print(f'Run dir : {run_dir}')
     print(f'Channel : {chan_label}  (thermal var = {th_var})')
 
-    # ------- Time / thermal slice from the main CDF ---------------------
-    t_jet_grid = read_time_grid(cdf_path) + 40.0
-    if args.time is None:
-        time_jet = float(t_jet_grid[len(t_jet_grid) // 2])
-        print(f'No time supplied; using midpoint t_JET = {time_jet:.3f} s.')
-    else:
-        time_jet = float(args.time)
-    trind = int(np.abs(t_jet_grid - time_jet).argmin())
+    # ------- Time selection (-t / --idx) + thermal slice ----------------
+    trinds, eq_ref_jet, time_jet, time_desc = resolve_time_selection(
+        cdf_path, run_dir, run_id, times=args.time, idx=args.idx)
+    print(f'Time selection: {time_desc}')
 
     (thntx_x, x_rhot, dvol_x, thntx_to_si,
-     dvol_to_m3, unit_th) = read_thermal_slice(cdf_path, th_var, trind)
+     dvol_to_m3, unit_th) = read_thermal_slice(cdf_path, th_var, trinds)
 
-    print(f'TRANSP slice [{trind}]: t_JET = {t_jet_grid[trind]:.3f} s '
-          f'(t_TRANSP = {t_jet_grid[trind] - 40.0:.3f} s)')
+    print(f'Averaged TRANSP slice(s): {trinds.tolist()}')
     print(f'  {th_var} units = [{unit_th}],  conversion to n/m3/s = '
           f'{thntx_to_si:.1e}')
     print(f'  {th_var}(rhot=0) = {thntx_x[0]:.3e} [{unit_th}]  '
           f'= {thntx_x[0] * thntx_to_si:.3e} n/m3/s')
 
-    # ------- Equilibrium ------------------------------------------------
+    # ------- Equilibrium (single slice at eq_ref_jet) -------------------
     if args.eq_source == 'ppf':
         print(f'Equilibrium: PPF {args.dda}/{args.uid}/{args.seq} '
-              f'(importing ppf) ...')
-        eqs = EqPPF(args.pulse, args.dda, args.uid, args.seq, time_jet)
+              f'@ {eq_ref_jet:.3f}s (importing ppf) ...')
+        eqs = EqPPF(args.pulse, args.dda, args.uid, args.seq, eq_ref_jet)
     else:
-        print('Equilibrium: TRANSP CDF (self-contained, no ppf) ...')
-        eqs = EqCDF(cdf_path, time_jet)
+        print(f'Equilibrium: TRANSP CDF @ {eq_ref_jet:.3f}s '
+              f'(self-contained, no ppf) ...')
+        eqs = EqCDF(cdf_path, eq_ref_jet)
     Rmag, Zmag = eqs.Rmag, eqs.Zmag
     print(f'Equilibrium slice: t = {eqs.t_eq_jet:.3f} s   [{eqs.label}]')
     print(f'  Rmag = {Rmag:.3f} m, Zmag = {Zmag:.3f} m')
@@ -616,7 +633,7 @@ def main(argv=None):
               f'|x| <= {np.abs(cells["x"]).max():.3f} m (tangential)')
         losf = los_file_detector_rate(
             cells, eqs, xs_sorted, thntx_sorted, thntx_to_si, dvol_m3,
-            subgrid=not args.no_subgrid,
+            subgrid=not args.no_subgrid, median=not args.no_median,
         )
         print(f'  Cells inside LCFS    : {losf["n_inside"]} / '
               f'{cells["R"].size} '

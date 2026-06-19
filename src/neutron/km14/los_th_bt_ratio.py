@@ -107,6 +107,9 @@ from los_common import (
     CdfEquilibrium,
     EqCDF,
     read_los_file,
+    read_scalar_totals,
+    flux_avg_profile,
+    interp_flux_to,
     los_shell_fraction,
     los_file_detector_rate,
 )
@@ -154,15 +157,6 @@ def read_thermal_profile(cdf_path, var, tind):
         X = np.array(d["X"][tind])
         prof = np.array(d[var][tind])
     return X, prof
-
-
-def read_scalar_totals(cdf_path, tind):
-    with Dataset(cdf_path, "r") as d:
-        out = {}
-        for k in ("BTNTS_DD", "BTNTS_DT", "BTNTS_TT", "BTNTS_TD"):
-            if k in d.variables:
-                out[k] = float(d[k][tind])
-    return out
 
 
 # ----------------------------------------------------------------------
@@ -322,14 +316,6 @@ def bt_anisotropy_factors(fi, cdf_path, bt_keys, det_R, det_Z, args):
 # Emissivity on the chord grid
 # ----------------------------------------------------------------------
 
-def flux_avg_profile(values_zone, x2d, bmvol):
-    """BMVOL-weighted flux-surface average per x-row -> (x_rows, profile)."""
-    xu = np.unique(x2d)
-    prof = np.array([np.sum(values_zone[x2d == xv] * bmvol[x2d == xv])
-                     / np.sum(bmvol[x2d == xv]) for xv in xu])
-    return xu, prof
-
-
 def profile_on_grid(x_prof, val_prof, rhot_grid, inside):
     """PCHIP-interpolate a flux profile onto rhot(R, Z); zero outside the LCFS."""
     order = np.argsort(x_prof)
@@ -374,26 +360,6 @@ def toroidal_integral(grid_si, R, Z):
 # LOS weight function f(rhot) and LOS-weighted TH/BT profiles vs rhot
 # ----------------------------------------------------------------------
 
-def _interp_flux_to(x_src, y_src, x_dst):
-    """PCHIP a flux profile y_src(x_src) onto x_dst, padded to cover [0, 1].
-
-    Same padding convention as ``profile_on_grid``: rhot=0 takes the on-axis
-    value, rhot=1 is forced to zero, and points outside the source support are
-    set to 0 (never negative).
-    """
-    order = np.argsort(x_src)
-    xs = np.asarray(x_src, float)[order]
-    ys = np.asarray(y_src, float)[order]
-    uniq = np.concatenate(([True], np.diff(xs) > 0))
-    xs, ys = xs[uniq], ys[uniq]
-    if xs[0] > 0.0:
-        xs = np.concatenate(([0.0], xs)); ys = np.concatenate(([ys[0]], ys))
-    if xs[-1] < 1.0:
-        xs = np.concatenate((xs, [1.0])); ys = np.concatenate((ys, [0.0]))
-    out = PchipInterpolator(xs, ys, extrapolate=False)(np.asarray(x_dst, float))
-    return np.clip(np.where(np.isnan(out), 0.0, out), 0.0, None)
-
-
 def rhot_weight_profiles(eq, rhot, inside, R, Z, x_th, th_prof, x_bt, bt_prof,
                          cdf_path):
     """LOS shell-fraction weight f(rhot) and LOS-weighted TH/BT vs rhot.
@@ -428,7 +394,7 @@ def rhot_weight_profiles(eq, rhot, inside, R, Z, x_th, th_prof, x_bt, bt_prof,
                               rmag=eq.Rmag)
 
     th_si = np.asarray(th_prof, float)[order] * 1.0e6        # n/m3/s
-    bt_si = _interp_flux_to(x_bt, bt_prof, xs) * 1.0e6       # n/m3/s
+    bt_si = interp_flux_to(x_bt, bt_prof, xs) * 1.0e6       # n/m3/s
 
     thkm14 = th_si * f
     btkm14 = bt_si * f
