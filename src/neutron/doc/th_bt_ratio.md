@@ -253,6 +253,13 @@ choice of weighting actually matters. For ratio-only analyses on
 shells fully inside the chord, picking DVOL, `f·DVOL` or `f_det·DVOL`
 gives the same answer; pick whichever is cheapest.
 
+The **cross-diagnostic** version of this argument — why the KM9 and KM14
+cumulative TH/BT coincide on the core and diverge only past ρ ≈ 0.4,
+even though their normalized weights overlap there — is in
+[`compare_los.md`](compare_los.md). Same root cause: a weighted average of
+the (shared) local ratio is weight-insensitive wherever the local ratio is
+flat, so weighting differences only surface on the structured edge.
+
 ## Open / next
 
 * **Run on the M29 pure-DD case** (the actual KM14 thermal-analysis run,

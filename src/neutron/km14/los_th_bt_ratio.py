@@ -79,7 +79,9 @@ Plotting (mirrors km9 / ``los_thermal_rate.py``)
 ``--plot`` shows the **radial analysis** as a KM9-style 1x3: the
 detector-coupling weight ``f(rhot)`` [+ real-LOS ``f_det``], TH/BT vs rhot
 (cumulative LOS / real-LOS / full-plasma, with the local ratio overlaid), and
-the per-shell detector signal ``TH*f*DVOL`` / ``BT*f*DVOL``. ``--diagnostic-plot``
+the per-shell detector signal -- ``TH*f_det*DVOL`` / ``BT*f_det*DVOL`` for the
+real LOS when ``--los-file`` is given, else the geometric box ``TH*f*DVOL`` /
+``BT*f*DVOL``. ``--diagnostic-plot``
 adds a second 1x3 figure of the effective per-shell weights (PDF in rhot of
 DVOL, ``f*DVOL``, ``f_det*DVOL`` and their action on TH and BT). ``--plot-los``
 shows the **LOS geometry**: the spatial ``eps_TH``, ``eps_BT`` and ``TH/BT``
@@ -681,12 +683,15 @@ def main(argv=None):
             cells_los, eqcdf, wp["xs"], wp["th_si"] / 1.0e6, 1.0e6,
             wp["dvol_m3"])
         f_det = fres["f_det"]
-        cum_th_d = np.cumsum(wp["th_si"] * f_det * wp["dvol_m3"])
-        cum_bt_d = np.cumsum(wp["bt_si"] * f_det * wp["dvol_m3"])
+        shell_th_det = wp["th_si"] * f_det * wp["dvol_m3"]   # n/s per shell
+        shell_bt_det = wp["bt_si"] * f_det * wp["dvol_m3"]
+        cum_th_d = np.cumsum(shell_th_det)
+        cum_bt_d = np.cumsum(shell_bt_det)
         with np.errstate(invalid="ignore", divide="ignore"):
             ratio_cum_det = np.where(cum_bt_d > 0, cum_th_d / cum_bt_d, np.nan)
         los_det = dict(
             f_det=f_det, ratio_cum_det=ratio_cum_det,
+            shell_th_det=shell_th_det, shell_bt_det=shell_bt_det,
             rhot_crit=fres["rhot_crit"], thbt_det=float(ratio_cum_det[-1]),
             R_cells=fres["R_cells"], Z_cells=fres["Z_cells"],
             C_cells=fres["C_cells"], inside_cells=fres["inside_cells"])
@@ -827,7 +832,10 @@ def make_plot(run_id, idx, chan_label, th_los, bt_los, wp,
       (0) Detector-coupling weight  -- geometric LOS f(rhot) [+ real-LOS f_det]
       (1) TH/BT vs rhot             -- cumulative TH/BT (LOS / real-LOS / plasma)
                                        with the local ratio overlaid
-      (2) Per-shell detector signal -- per-shell LOS rate TH*f*DVOL, BT*f*DVOL
+      (2) Per-shell detector signal -- per-shell LOS rate using the real-LOS
+                                       etendue weight TH*f_det*DVOL / BT*f_det*DVOL
+                                       when --los-file is given, else the
+                                       geometric box weight TH*f*DVOL / BT*f*DVOL
 
     With ``diagnostic=True`` (``--diagnostic-plot``) a second 1x3 figure of the
     effective per-shell weights (PDF in rhot) is also produced.
@@ -876,13 +884,26 @@ def make_plot(run_id, idx, chan_label, th_los, bt_los, wp,
     a.legend(fontsize=8)
 
     a = ax[2]                                      # (2) per-shell detector signal
-    a.plot(xs, wp["shell_th"], "r-", lw=1.4, label=r"TH$\cdot f\cdot$DVOL")
-    a.plot(xs, wp["shell_bt"], "b-", lw=1.4, label=r"BT$\cdot f\cdot$DVOL")
-    a.fill_between(xs, 0.0, wp["shell_th"], color="r", alpha=0.10)
-    a.fill_between(xs, 0.0, wp["shell_bt"], color="b", alpha=0.10)
+    # Use the real-LOS etendue weighting f_det (TH*f_det*DVOL / BT*f_det*DVOL)
+    # when a --los-file is supplied; otherwise fall back to the geometric box
+    # chord weight f (TH*f*DVOL / BT*f*DVOL). Mirrors km9 panel (2).
+    if los_det is not None:
+        shell_th, shell_bt = los_det["shell_th_det"], los_det["shell_bt_det"]
+        th_lbl = r"TH$\cdot f_{\rm det}\cdot$DVOL"
+        bt_lbl = r"BT$\cdot f_{\rm det}\cdot$DVOL"
+        sig_src = "real LOS"
+    else:
+        shell_th, shell_bt = wp["shell_th"], wp["shell_bt"]
+        th_lbl = r"TH$\cdot f\cdot$DVOL"
+        bt_lbl = r"BT$\cdot f\cdot$DVOL"
+        sig_src = "geometric box"
+    a.plot(xs, shell_th, "b-", lw=1.4, label=th_lbl)
+    a.plot(xs, shell_bt, "r-", lw=1.4, label=bt_lbl)
+    a.fill_between(xs, 0.0, shell_th, color="b", alpha=0.10)
+    a.fill_between(xs, 0.0, shell_bt, color="r", alpha=0.10)
     a.set_xlim(0, 1); a.set_ylim(bottom=0.0); a.grid(True, ls=":")
     a.set_xlabel("rhot"); a.set_ylabel("per-shell LOS rate [n/s]")
-    a.set_title("Per-shell detector signal")
+    a.set_title(f"Per-shell detector signal ({sig_src})")
     a.legend(fontsize=8)
 
     fig.suptitle(f"{run_id} idx{idx}  KM14 LOS TH/BT  {chan_label}")

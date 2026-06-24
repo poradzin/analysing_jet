@@ -76,6 +76,11 @@ TIME3 slices (see "time-window averaging" below).
 | `los_th_bt_ratio.py` | KM9 LOS TH/BT ratio (real-cell, isotropic BT v1). |
 | `plot_LoS.py` | KM9 LOS geometry: three orthogonal projections (poloidal, top, side elevation). Called via `--plot-los`. |
 
+### Cross-diagnostic (`./`)
+| script | purpose |
+|---|---|
+| `compare_los.py` | Overlay the KM9 and KM14 **real-LOS** TH/BT diagnostics on one 1×(2+N) figure: normalized `f_det` + cumulative signal fraction, cumulative TH/BT, and a per-shell detector-signal panel per diagnostic. Reuses `los_common` (reproduces both scripts exactly); no box chord. See [`doc/compare_los.md`](doc/compare_los.md). |
+
 ## Quickstart (recommended order — each step validates the next)
 
 ```bash
@@ -100,6 +105,10 @@ python km14_spectrum.py   104614 M29 --idx 1 --include-scatt
 cd ../km9
 python los_thermal_rate.py 104614 M29 --idx 2 --plot --plot-los
 python los_th_bt_ratio.py  104614 M29 --idx 2 --plot
+
+# KM9 vs KM14 real-LOS side by side
+cd ..
+python compare_los.py 104614 M29 --idx 2 --plot
 ```
 
 Every `--plot` opens an interactive window; `--save <file.png>` writes a
@@ -137,3 +146,7 @@ construct).
 * [km9.md](doc/km9.md) — KM9/MPRu: horizontal-chord handling, near-axis
   `f_det` fixes, aliasing/median de-speckle, time-window averaging,
   `plot_LoS` geometry views.
+* [compare_los.md](doc/compare_los.md) — KM9 vs KM14 real-LOS overlay
+  (`compare_los.py`): the shared machinery, the figure layout, and **why the
+  cumulative TH/BT diverges past rhot ≈ 0.4 while the weights overlap** (the
+  core/edge "ballast" split levered by the steep edge falloff of local TH/BT).

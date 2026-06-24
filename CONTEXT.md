@@ -48,6 +48,15 @@ WSL dev env. Shared code lives in `common/los_common.py`; `km14/` and
   factored out; KM9 `los_thermal_rate.py` / `los_th_bt_ratio.py` /
   `plot_LoS.py` written; time-window averaging (`-t`/`--idx`) added. KM14
   numbers reproduce byte-for-byte after the refactor.
+* **KM9-vs-KM14 real-LOS comparison** (`compare_los.py`, added 2026-06-24):
+  one driver overlays both diagnostics' real-LOS weight, cumulative TH/BT and
+  per-shell signal (no box); reuses `los_common`, reproduces both scripts
+  exactly. Key insight: the two cumulative TH/BT coincide on the core and
+  diverge only past rhot ≈ 0.4 — a weighted average of the *shared* local
+  ratio is weight-insensitive where that ratio is flat (core), so the chords'
+  different core/edge "ballast" (KM14 banks 69 % of its BT signal inside
+  rhot 0.4 vs KM9's 63 %) only surfaces on the structured edge. See
+  [`doc/compare_los.md`](src/neutron/doc/compare_los.md).
 
 ## Open items / next steps
 

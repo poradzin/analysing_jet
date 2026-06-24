@@ -176,7 +176,7 @@ def diagnostic_plots(res, save=None):
 
     # ---- (1) TH/BT vs rhot -----------------------------------------------
     ax = axes[1]
-    ax.plot(xs, res['ratio_local'], 'k-', lw=1.4, label='local TH/BT(rhot)')
+    ax.plot(xs, res['ratio_local'], color="0.6", lw=1.0, alpha=0.8, label='local TH/BT(rhot)')
     ax.plot(xs, res['ratio_cum_det'], 'm-', lw=1.6,
             label=f'cum. C-weighted -> {res["thbt_los"]:.3f}')
     ax.plot(xs, res['ratio_cum_plasma'], color='0.5', ls='--', lw=1.3,
