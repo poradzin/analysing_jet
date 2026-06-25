@@ -48,6 +48,13 @@ WSL dev env. Shared code lives in `common/los_common.py`; `km14/` and
   factored out; KM9 `los_thermal_rate.py` / `los_th_bt_ratio.py` /
   `plot_LoS.py` written; time-window averaging (`-t`/`--idx`) added. KM14
   numbers reproduce byte-for-byte after the refactor.
+* **LoS weight `.npz` for jet_tritium** (`make_los_weights.py`, added
+  2026-06-25): driver that walks a TRANSP run's TIME3 grid and dumps
+  `f_det(rhot, t)` + DVOL + reference THNTX as one `.npz` per (pulse, run,
+  diagnostic) for `~/jet/jet_tritium` to consume. Per-slice numbers reproduce
+  the standalone KM9/KM14 `los_thermal_rate.py` byte-for-byte (KM9 4.34e9 n/s,
+  KM14 real-cell `rho_50 ≈ 0.252` on 104614 M29). See
+  [`doc/make_los_weights.md`](src/neutron/doc/make_los_weights.md).
 * **KM9-vs-KM14 real-LOS comparison** (`compare_los.py`, added 2026-06-24):
   one driver overlays both diagnostics' real-LOS weight, cumulative TH/BT and
   per-shell signal (no box); reuses `los_common`, reproduces both scripts

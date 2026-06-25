@@ -80,6 +80,7 @@ TIME3 slices (see "time-window averaging" below).
 | script | purpose |
 |---|---|
 | `compare_los.py` | Overlay the KM9 and KM14 **real-LOS** TH/BT diagnostics on one 1×(2+N) figure: normalized `f_det` + cumulative signal fraction, cumulative TH/BT, and a per-shell detector-signal panel per diagnostic. Reuses `los_common` (reproduces both scripts exactly); no box chord. See [`doc/compare_los.md`](doc/compare_los.md). |
+| `make_los_weights.py` | Dump the time-resolved LoS detector coupling weight `f_det(rhot, t)` for KM9 or KM14 across a TRANSP run's TIME3 grid into one `.npz` (channel-independent geometry × equilibrium). Built for `~/jet/jet_tritium` to replace its KM14 `∫_0^0.2` / KM9 full-volume proxies with a proper LoS-weighted sum. See [`doc/make_los_weights.md`](doc/make_los_weights.md). |
 
 ## Quickstart (recommended order — each step validates the next)
 
@@ -150,3 +151,9 @@ construct).
   (`compare_los.py`): the shared machinery, the figure layout, and **why the
   cumulative TH/BT diverges past rhot ≈ 0.4 while the weights overlap** (the
   core/edge "ballast" split levered by the steep edge falloff of local TH/BT).
+* [make_los_weights.md](doc/make_los_weights.md) — `make_los_weights.py`: the
+  cross-repo handoff for `~/jet/jet_tritium`. Dumps `f_det(rhot, t)` + DVOL +
+  reference THNTX as one `.npz` per (pulse, run, diagnostic), so the consumer
+  replaces `KM14 ∫_0^0.2` / `KM9 full-volume` proxies with a single
+  `np.sum(eps · f_det · DVOL)` per slice. Output schema, closure check, and
+  reader recipe.
