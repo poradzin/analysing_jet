@@ -259,13 +259,13 @@ def RZ_to_psin(R_pts, Z_pts, eq, time,
 
         # Fallback for NaNs
         if np.any(np.isnan(psin_at_pts)):
-            psin_at_pts = griddata(
+            psin_at_pts_lin = griddata(
                 (Rf2, Zf2),
                 psinf2,
                 RZ,
                 method='linear'
             )
-            psin_at_pts = np.where(np.isnan(rho_interp), rho_interp2, rho_interp)
+            psin_at_pts = np.where(np.isnan(psin_at_pts), psin_at_pts_lin, psin_at_pts)
     else:
         psin_grid = np.reshape(eq._psi_norm[tind], (nR,nZ))
 
@@ -541,12 +541,15 @@ def Rbnd_at_midplane(eq, time):
     # Return R at psin = 1
     return float(f(1.0))
 
-def psin_to_RZ_midplane(psin_in, eq, time, method='cubic'):
+def psin_to_RZ_midplane(psin_in, eq, time, method='cubic', psin_max=1.01):
     """
     Input: psin_in
-    Maps input psin_in onto RZ midplane (LFS) 
-    Maps RZ midplane on the LFS to psin from equilibirum.  
+    Maps input psin_in onto RZ midplane (LFS)
+    Maps RZ midplane on the LFS to psin from equilibirum.
     May find R at the midplane where psin = 1 (i.e., outer midplane boundary).
+    psin_max: upper psin limit of the R(psin) fit. Use psin_max>1 to map
+              points outside the separatrix (e.g. HRTS edge channels).
+    Output has the same length as psin_in; points below the fit range are NaN.
     """
     tind = np.abs(eq.t - time).argmin()
 
@@ -571,9 +574,9 @@ def psin_to_RZ_midplane(psin_in, eq, time, method='cubic'):
     R_m = R_aux[monotonic_mask]
 
     # Remove possible trailing plateau at 1.3 (EFIT's outside value)
-    # Keep only psin <= 1.01 + small epsilon
+    # Keep only psin <= psin_max + small epsilon
     eps = 1e-5
-    inside_mask = psin_m <= (1.01 + eps)
+    inside_mask = psin_m <= (psin_max + eps)
     psin_m = psin_m[inside_mask]
     R_m = R_m[inside_mask]
 
@@ -585,11 +588,13 @@ def psin_to_RZ_midplane(psin_in, eq, time, method='cubic'):
     f = PchipInterpolator(psin_m, R_m)
     print(f'psin_m[:2]: {psin_m[:2]}')
     print(f'psin_in[:4]: {psin_in[:4]}')
+    # keep output aligned with psin_in: NaN instead of dropping points
+    psin_in = np.asarray(psin_in, dtype=float)
+    R_out = np.full(psin_in.shape, np.nan)
     psin_in_mask = psin_in >= psin_m[0]
-    #psin_out = np.linspace(psin_m[0],1.0,100)
-    psin_out = psin_in[psin_in_mask]
+    R_out[psin_in_mask] = f(psin_in[psin_in_mask])
 
-    return f(psin_out)
+    return R_out
 
 def rhot_to_RZ_midplane(rhot_in, eq, time, norm=True,method='cubic'):
     """
@@ -651,7 +656,18 @@ if args.hrts:
     (data_hrts,x_hrts,t_hrts) = hrts_data['data']
     print(f'shape(data_hrts): {np.shape(data_hrts)}')
     print(f'shape(x_hrts): {np.shape(x_hrts)}')
-    Rmid_hrts = rhot_to_RZ_midplane(x_hrts, eq, time)
+    # Map HRTS (R,Z) directly to psin and then to midplane R. Going through rhot
+    # (x_hrts) folds points with rhot>1 back inside the separatrix, because
+    # psin(rhot) is only defined for rhot<=1 and its extrapolation turns over.
+    hrts_key = ('HRTS', sig, 'jetppf', args.hrts_seq)
+    R_hrts = np.asarray(hrts._data_dict[hrts_key]['r'])
+    Z_hrts = np.asarray(hrts._data_dict[hrts_key]['z'])
+    psin_hrts, *_ = RZ_to_psin_3(R_hrts, Z_hrts, eq, time)
+    Rpts_hrts = psin_to_RZ_midplane(psin_hrts, eq, time, psin_max=1.5)
+    Rmag_hrts = eq.Rmag[np.abs(eq.t-time).argmin()]
+    Rmid_hrts = (Rpts_hrts-Rmag_hrts)/(Rbnd_at_midplane(eq, time)-Rmag_hrts)
+    # exclude HFS channels (R<Rmag)
+    Rmid_hrts[R_hrts<Rmag_hrts] = np.nan
     (error,x_err,t_err) = hrts_data['error']
     tind_hrts = np.abs(t_hrts-time).argmin()
     print(f'shape(t_hrts): {np.shape(t_hrts)}')
