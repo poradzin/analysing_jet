@@ -176,7 +176,7 @@ def RZ_to_psi(R_pts, Z_pts, eq, time,
     return psi_at_pts
 
 def RZ_to_psin(R_pts, Z_pts, eq, time,
-    method='linear' # interpolation method: 'linear' or 'nearest' or 'cubic' (griddata)
+    method='cubic' # interpolation method: 'linear' or 'nearest' or 'cubic' (griddata)
     ):
     """
     Map points (R_pts, Z_pts) onto poloidal flux.
@@ -508,8 +508,8 @@ def Rbnd_at_midplane(eq, time):
     Z_aux = np.full(200, Z_mid)
     R_aux = np.linspace(eq._Rmag[tind], eq._psir[-1], 200)
 
-    # Compute psin along the midplane
-    psin,*_ = RZ_to_psin_3(R_aux, Z_aux, eq, time)
+    # Compute psin along the midplane (griddata incl. the (Rmag,Zmag) point)
+    psin = RZ_to_psin(R_aux, Z_aux, eq, time, method='cubic')
 
     # Ensure psin is strictly increasing: keep only unique increasing values
     # otherwise inverse interpolation is not possible
@@ -517,8 +517,8 @@ def Rbnd_at_midplane(eq, time):
     R_aux = np.asarray(R_aux)
 
     # Build monotonic mask
-    # True if psin[i] > psin[i-1]
-    monotonic_mask = np.concatenate(([True], np.diff(psin) > 0))
+    # True if psin[i] > max(psin[:i]) (running maximum, robust to cubic overshoot)
+    monotonic_mask = psin > np.concatenate(([-np.inf], np.fmax.accumulate(psin)[:-1]))
 
     psin_m = psin[monotonic_mask]
     R_m = R_aux[monotonic_mask]
@@ -567,8 +567,8 @@ def psin_to_RZ_midplane(psin_in, eq, time, method='cubic', psin_max=1.01):
     R_aux = np.asarray(R_aux)
 
     # Build monotonic mask
-    # True if psin[i] > psin[i-1]
-    monotonic_mask = np.concatenate(([True], np.diff(psin) > 0))
+    # True if psin[i] > max(psin[:i]) (running maximum, robust to cubic overshoot)
+    monotonic_mask = psin > np.concatenate(([-np.inf], np.fmax.accumulate(psin)[:-1]))
 
     psin_m = psin[monotonic_mask]
     R_m = R_aux[monotonic_mask]
@@ -662,7 +662,8 @@ if args.hrts:
     hrts_key = ('HRTS', sig, 'jetppf', args.hrts_seq)
     R_hrts = np.asarray(hrts._data_dict[hrts_key]['r'])
     Z_hrts = np.asarray(hrts._data_dict[hrts_key]['z'])
-    psin_hrts, *_ = RZ_to_psin_3(R_hrts, Z_hrts, eq, time)
+    # griddata incl. the (Rmag,Zmag) point; clip cubic undershoot near the axis to 0
+    psin_hrts = np.clip(RZ_to_psin(R_hrts, Z_hrts, eq, time, method='cubic'), 0.0, None)
     Rpts_hrts = psin_to_RZ_midplane(psin_hrts, eq, time, psin_max=1.5)
     Rmag_hrts = eq.Rmag[np.abs(eq.t-time).argmin()]
     Rmid_hrts = (Rpts_hrts-Rmag_hrts)/(Rbnd_at_midplane(eq, time)-Rmag_hrts)
