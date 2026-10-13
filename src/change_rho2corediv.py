@@ -672,8 +672,8 @@ if args.hrts:
     tind_hrts = np.abs(t_hrts-time).argmin()
     print(f'shape(t_hrts): {np.shape(t_hrts)}')
     print(f'tind_hrts: t_hrts[{tind_hrts}]={t_hrts[tind_hrts]:.3f}s')
-    xmask_hrts = Rmid_hrts<=1.0                                                                          
-    x_h_mask = x_hrts<=1.0 
+    xmask_hrts = Rmid_hrts<=1.035
+    x_h_mask = x_hrts<=1.035
 if args.hrts and args.plot: 
     plt.errorbar(Rmid_hrts[xmask_hrts],data_hrts[tind_hrts][xmask_hrts], yerr=error[tind_hrts][xmask_hrts],
             fmt='o',

@@ -2,3 +2,4 @@ __pycache__/
 .venv/
 venvs/
 venvs/py311/
+src/tmp/
