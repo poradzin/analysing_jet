@@ -25,6 +25,7 @@ time range common to all runs, so the averages are directly comparable.
 Examples:
   python transp_hfactor.py 104614 M30
   python transp_hfactor.py 104614 M30 M31 M32 --window 52.5 54.0 --plot
+  python transp_hfactor.py 104614 M30 --hfactors H98Y H98Y1 H98Y2 --csv h_traces.csv
   python transp_hfactor.py 104614 M30 --window 52.5 54.0
   python transp_hfactor.py 104614 M30 --window 52.5 54.0 --plot
   python transp_hfactor.py 104614 M30 --hfactors H98Y H98Y1 H98Y2 --plot --save h.png
@@ -80,6 +81,24 @@ def load_run(pulse, runid, keys, root, toffset):
     return {'path': path, 'data': data}
 
 
+def write_traces_csv(fname, pulse, runs, hfactors, t1, t2):
+    """One row per time point and run: pulse, runid, JET time, in_window, H-factors."""
+    import csv
+    with open(fname, 'w', newline='') as fh:
+        w = csv.writer(fh)
+        w.writerow(['pulse', 'runid', 'time_jet_s', 'in_window'] + list(hfactors))
+        for r, run in runs.items():
+            t = run['data'][hfactors[0]][0]
+            cols = []
+            for k in hfactors:          # put every H-factor on the first one's time base
+                tk, yk = run['data'][k]
+                cols.append(yk if np.array_equal(tk, t) else np.interp(t, tk, yk))
+            for i, ti in enumerate(t):
+                w.writerow([pulse, r, '%.5f' % ti, int(t1 <= ti <= t2)] +
+                           ['%.6g' % c[i] for c in cols])
+    print('H-factor traces written to %s' % fname)
+
+
 def main():
     p = argparse.ArgumentParser(
         description='TRANSP confinement time and H-factor summary; '
@@ -97,6 +116,9 @@ def main():
     p.add_argument('--plot', action='store_true', help='plot H-factors and TAUEA')
     p.add_argument('--save', metavar='FILE',
                    help='save the plot to FILE instead of showing it')
+    p.add_argument('--csv', metavar='FILE',
+                   help='write the H-factor time traces to a CSV file '
+                        '(full run; column in_window marks the averaging window)')
     p.add_argument('--root', default=TRANSP_PATH, help='TRANSP results root directory')
     args = p.parse_args()
 
@@ -134,6 +156,9 @@ def main():
                      'Check --window and --toffset.' % (r, a, b, t1, t2))
         if args.window and (a > t1 or b < t2):
             print('WARNING: run %s covers only part of the window' % r)
+
+    if args.csv:
+        write_traces_csv(args.csv, args.pulse, runs, args.hfactors, t1, t2)
 
     # statistics: res[run][signal] = (mean, std, median, N)
     res = {}
