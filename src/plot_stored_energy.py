@@ -208,12 +208,16 @@ def finish_figure(fig, ax, pulse, runs, title, colour_items, ymax):
     leg_q = ax.legend(handles=colour_handles, fontsize="small", loc="lower left")
     leg_q.set_draggable(True)
     ax.add_artist(leg_q)
-    leg_r = ax.legend(handles=run_handles, fontsize="small", loc="lower right",
-                      title="TRANSP run [equilibrium]", title_fontsize="small")
-    leg_r.set_draggable(True)
 
     cornernote(pulse)
     fig.tight_layout()
+
+    # Run legend stacked just above the quantity legend (lower left)
+    bbox = leg_q.get_window_extent(fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+    leg_r = ax.legend(handles=run_handles, fontsize="small", loc="lower left",
+                      bbox_to_anchor=(0.0, bbox.y1 + 0.005), borderaxespad=0.5,
+                      title="TRANSP run [equilibrium]", title_fontsize="small")
+    leg_r.set_draggable(True)
     return fig
 
 
