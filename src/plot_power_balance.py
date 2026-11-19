@@ -101,10 +101,12 @@ def rolling_mean(times, values, window):
         return np.where(counts > 0, (csum[hi] - csum[lo]) / counts, np.nan)
 
 
-def window_label(time_value, window):
-    if window is None or window <= 0:
-        return f"t = {time_value:.2f}"
-    return f"t = {time_value:.2f} $\\pm$ {0.5 * window:.3g} s"
+def window_label(times, idx):
+    """Describe the TRANSP time slices actually used for a snapshot."""
+    used = np.asarray(times)[idx]
+    if used.size == 1:
+        return f"t = {used[0]:.3f} s"
+    return f"<t> = {used.mean():.3f} s (mean over {used[0]:.3f}-{used[-1]:.3f} s, {used.size} slices)"
 
 
 def convert_units(units):
@@ -197,15 +199,15 @@ def get_volume_integrated_series(transp, signals):
 
 
 def plot_snapshot(transp, integrated, signals, time_value, pulse, win, window=None):
+    time_idx = window_indices(transp.t, time_value, window)
     fig = plt.figure()
     prefix = "time-averaged " if window else ""
     fig.suptitle(
-        f"{transp.transpcid} {prefix}volume-integrated power balance at {window_label(time_value, window)}",
+        f"{transp.transpcid} {prefix}volume-integrated power balance at {window_label(transp.t, time_idx)}",
         fontsize=13,
     )
     ax = fig.add_subplot(111)
 
-    time_idx = window_indices(transp.t, time_value, window)
     values = []
     labels = []
     colors = []
@@ -234,15 +236,15 @@ def plot_snapshot(transp, integrated, signals, time_value, pulse, win, window=No
 
 
 def plot_zone_snapshot(transp, signals, time_value, pulse, win, window=None):
+    time_idx = window_indices(transp.t, time_value, window)
     fig = plt.figure()
     prefix = "time-averaged " if window else ""
     fig.suptitle(
-        f"{transp.transpcid} {prefix}zone contributions at {window_label(time_value, window)}",
+        f"{transp.transpcid} {prefix}zone contributions at {window_label(transp.t, time_idx)}",
         fontsize=13,
     )
     ax = fig.add_subplot(111)
 
-    time_idx = window_indices(transp.t, time_value, window)
     x_mean = np.nanmean(np.asarray(transp.x)[time_idx, :], axis=0)
     unit = "W"
 
@@ -366,9 +368,18 @@ def main():
         print("No requested power-balance signals were found in this run.")
         return 1
 
+    t_min, t_max = float(np.min(transp.t)), float(np.max(transp.t))
+    print(f"TRANSP time range for {transp.transpcid}: {t_min:.3f} - {t_max:.3f} s")
+    times = [tv for tv in args.time if t_min <= tv <= t_max]
+    for tv in args.time:
+        if tv not in times:
+            print(f"WARNING: requested time {tv:.3f} s is outside the TRANSP time range; skipping.")
+    if not times:
+        print("None of the requested --time values lie within the run; only the time trace is plotted.")
+
     integrated = get_volume_integrated_series(transp, loaded)
     win = pw.plotWindow()
-    for time_value in args.time:
+    for time_value in times:
         plot_snapshot(transp, integrated, loaded, time_value, args.pulse, win, args.window)
         plot_zone_snapshot(transp, loaded, time_value, args.pulse, win, args.window)
     plot_time_trace(transp, loaded, args.pulse, win, args.window)
