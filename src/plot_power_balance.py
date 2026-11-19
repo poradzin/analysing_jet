@@ -206,8 +206,6 @@ def plot_snapshot(transp, integrated, signals, time_value, pulse, win, window=No
         f"{transp.transpcid} {prefix}volume-integrated power balance at {window_label(transp.t, time_idx)}",
         fontsize=13,
     )
-    if len(time_idx) > 1:
-        fig.subplots_adjust(top=0.84)
     ax = fig.add_subplot(111)
 
     values = []
@@ -235,6 +233,9 @@ def plot_snapshot(transp, integrated, signals, time_value, pulse, win, window=No
 
     cornernote(ax, pulse)
     win.addPlot(f"power balance @ {time_value:.2f}s", fig)
+    if len(time_idx) > 1:
+        # plotWindow.addPlot resets the margins; make room for the two-line title afterwards
+        fig.subplots_adjust(top=0.82)
 
 
 def plot_zone_snapshot(transp, signals, time_value, pulse, win, window=None):
@@ -245,8 +246,6 @@ def plot_zone_snapshot(transp, signals, time_value, pulse, win, window=None):
         f"{transp.transpcid} {prefix}zone contributions at {window_label(transp.t, time_idx)}",
         fontsize=13,
     )
-    if len(time_idx) > 1:
-        fig.subplots_adjust(top=0.84)
     ax = fig.add_subplot(111)
 
     x_mean = np.nanmean(np.asarray(transp.x)[time_idx, :], axis=0)
@@ -279,6 +278,9 @@ def plot_zone_snapshot(transp, signals, time_value, pulse, win, window=None):
     leg = ax.legend()
     leg.set_draggable(True)
     win.addPlot(f"zone contributions @ {time_value:.2f}s", fig)
+    if len(time_idx) > 1:
+        # plotWindow.addPlot resets the margins; make room for the two-line title afterwards
+        fig.subplots_adjust(top=0.82)
 
 
 def plot_time_trace(transp, signals, pulse, win, window=None):
