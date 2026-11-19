@@ -106,7 +106,7 @@ def window_label(times, idx):
     used = np.asarray(times)[idx]
     if used.size == 1:
         return f"t = {used[0]:.3f} s"
-    return f"<t> = {used.mean():.3f} s\n(mean over {used[0]:.3f}-{used[-1]:.3f} s, {used.size} slices)"
+    return f"\n<t> = {used.mean():.3f} s(mean over {used[0]:.3f}-{used[-1]:.3f} s, {used.size} slices)"
 
 
 def convert_units(units):

@@ -215,7 +215,7 @@ def finish_figure(fig, ax, pulse, runs, title, colour_items, ymax):
     # Run legend stacked just above the quantity legend (lower left)
     bbox = leg_q.get_window_extent(fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
     leg_r = ax.legend(handles=run_handles, fontsize="small", loc="lower left",
-                      bbox_to_anchor=(0.0, bbox.y1 + 0.005), borderaxespad=0.5,
+                      bbox_to_anchor=(0.0, bbox.y1 + 0.105), borderaxespad=0.5,
                       title="TRANSP run [equilibrium]", title_fontsize="small")
     leg_r.set_draggable(True)
     return fig
