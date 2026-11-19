@@ -67,6 +67,46 @@ def gi(val, data):
     return np.argmin(np.abs(data - val))
 
 
+def window_indices(times, center, window):
+    """Return indices of times within a window of total width `window` centred on `center`.
+
+    Falls back to the single closest index when no window is given or no
+    sample lies inside the window.
+    """
+    times = np.asarray(times)
+    if window is None or window <= 0:
+        return np.array([gi(times, center)])
+    idx = np.where(np.abs(times - center) <= 0.5 * window)[0]
+    if idx.size == 0:
+        idx = np.array([gi(times, center)])
+    return idx
+
+
+def rolling_mean(times, values, window):
+    """Centred rolling mean of `values` over a time window of total width `window`.
+
+    Works on non-uniform time bases and ignores NaNs.
+    """
+    values = np.asarray(values, dtype=float)
+    if window is None or window <= 0:
+        return values
+    times = np.asarray(times)
+    valid = np.isfinite(values)
+    csum = np.concatenate(([0.0], np.cumsum(np.where(valid, values, 0.0))))
+    ccount = np.concatenate(([0], np.cumsum(valid)))
+    lo = np.searchsorted(times, times - 0.5 * window, side="left")
+    hi = np.searchsorted(times, times + 0.5 * window, side="right")
+    counts = ccount[hi] - ccount[lo]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(counts > 0, (csum[hi] - csum[lo]) / counts, np.nan)
+
+
+def window_label(time_value, window):
+    if window is None or window <= 0:
+        return f"t = {time_value:.2f}"
+    return f"t = {time_value:.2f} $\\pm$ {0.5 * window:.3g} s"
+
+
 def convert_units(units):
     conversion = {
         "CM**2/SEC": (r"$m^2/s$", 1e-4),
@@ -156,22 +196,23 @@ def get_volume_integrated_series(transp, signals):
     return integrated
 
 
-def plot_snapshot(transp, integrated, signals, time_value, pulse, win):
+def plot_snapshot(transp, integrated, signals, time_value, pulse, win, window=None):
     fig = plt.figure()
+    prefix = "time-averaged " if window else ""
     fig.suptitle(
-        f"{transp.transpcid} volume-integrated power balance at t = {time_value:.2f}",
+        f"{transp.transpcid} {prefix}volume-integrated power balance at {window_label(time_value, window)}",
         fontsize=13,
     )
     ax = fig.add_subplot(111)
 
-    time_index = gi(transp.t, time_value)
+    time_idx = window_indices(transp.t, time_value, window)
     values = []
     labels = []
     colors = []
     for signal in signals:
         if signal not in integrated:
             continue
-        signed_value = BALANCE_SIGNS.get(signal, 1.0) * integrated[signal][time_index] * VOLUME_SCALE
+        signed_value = BALANCE_SIGNS.get(signal, 1.0) * np.nanmean(integrated[signal][time_idx]) * VOLUME_SCALE
         values.append(signed_value)
         labels.append(signal)
         colors.append(TERM_STYLES.get(signal, {}).get("color", "tab:blue"))
@@ -192,15 +233,17 @@ def plot_snapshot(transp, integrated, signals, time_value, pulse, win):
     win.addPlot(f"power balance @ {time_value:.2f}s", fig)
 
 
-def plot_zone_snapshot(transp, signals, time_value, pulse, win):
+def plot_zone_snapshot(transp, signals, time_value, pulse, win, window=None):
     fig = plt.figure()
+    prefix = "time-averaged " if window else ""
     fig.suptitle(
-        f"{transp.transpcid} zone contributions at t = {time_value:.2f}",
+        f"{transp.transpcid} {prefix}zone contributions at {window_label(time_value, window)}",
         fontsize=13,
     )
     ax = fig.add_subplot(111)
 
-    time_index = gi(transp.t, time_value)
+    time_idx = window_indices(transp.t, time_value, window)
+    x_mean = np.nanmean(np.asarray(transp.x)[time_idx, :], axis=0)
     unit = "W"
 
     for signal in signals:
@@ -208,9 +251,11 @@ def plot_zone_snapshot(transp, signals, time_value, pulse, win):
         if contrib is None:
             continue
         style = TERM_STYLES.get(signal, {})
-        signed_contrib = BALANCE_SIGNS.get(signal, 1.0) * contrib[time_index, :]
+        if contrib.ndim == 1:
+            continue
+        signed_contrib = BALANCE_SIGNS.get(signal, 1.0) * np.nanmean(contrib[time_idx, :], axis=0)
         ax.plot(
-            transp.x[time_index, :],
+            x_mean,
             signed_contrib,
             color=style.get("color", "tab:blue"),
             linestyle=style.get("linestyle", "-"),
@@ -230,9 +275,12 @@ def plot_zone_snapshot(transp, signals, time_value, pulse, win):
     win.addPlot(f"zone contributions @ {time_value:.2f}s", fig)
 
 
-def plot_time_trace(transp, signals, pulse, win):
+def plot_time_trace(transp, signals, pulse, win, window=None):
     fig = plt.figure()
-    fig.suptitle(f"{transp.transpcid} volume-integrated power balance", fontsize=13)
+    title = f"{transp.transpcid} volume-integrated power balance"
+    if window:
+        title += f" (rolling mean, {window:.3g} s window)"
+    fig.suptitle(title, fontsize=13)
     ax = fig.add_subplot(111)
 
     integrated = get_volume_integrated_series(transp, signals)
@@ -241,7 +289,9 @@ def plot_time_trace(transp, signals, pulse, win):
         if signal not in integrated:
             continue
         style = TERM_STYLES.get(signal, {})
-        signed_series = BALANCE_SIGNS.get(signal, 1.0) * integrated[signal] * VOLUME_SCALE
+        signed_series = rolling_mean(
+            transp.t, BALANCE_SIGNS.get(signal, 1.0) * integrated[signal] * VOLUME_SCALE, window
+        )
         ax.plot(
             transp.t,
             signed_series,
@@ -255,6 +305,7 @@ def plot_time_trace(transp, signals, pulse, win):
     for signal in signals:
         if signal in integrated:
             closure += BALANCE_SIGNS.get(signal, 1.0) * integrated[signal] * VOLUME_SCALE
+    closure = rolling_mean(transp.t, closure, window)
     ax.plot(
         transp.t,
         closure,
@@ -289,6 +340,16 @@ def parse_arguments():
         help="One or more TRANSP time slices for volume-integrated snapshots (default: 9.0)",
     )
     parser.add_argument(
+        "--window",
+        type=float,
+        default=None,
+        help=(
+            "Averaging time window width in seconds. Snapshots are averaged over "
+            "[t - window/2, t + window/2]; the time trace is smoothed with a centred "
+            "rolling mean of the same width (default: no averaging)"
+        ),
+    )
+    parser.add_argument(
         "--signals",
         nargs="*",
         default=POWER_BALANCE_TERMS,
@@ -308,9 +369,9 @@ def main():
     integrated = get_volume_integrated_series(transp, loaded)
     win = pw.plotWindow()
     for time_value in args.time:
-        plot_snapshot(transp, integrated, loaded, time_value, args.pulse, win)
-        plot_zone_snapshot(transp, loaded, time_value, args.pulse, win)
-    plot_time_trace(transp, loaded, args.pulse, win)
+        plot_snapshot(transp, integrated, loaded, time_value, args.pulse, win, args.window)
+        plot_zone_snapshot(transp, loaded, time_value, args.pulse, win, args.window)
+    plot_time_trace(transp, loaded, args.pulse, win, args.window)
     win.show()
     return 0
 
