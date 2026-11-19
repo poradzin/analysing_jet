@@ -2,13 +2,13 @@
 """
 Compare TRANSP stored-energy time traces for several runs of one JET pulse.
 
-Two panels:
-  top    - plasma energy:
+Two figures (separate tabs, 16x9 each):
+  1 - plasma energy:
              EQ/WDIA                                             (black)
              EQ/WP                                               (navy)
              WDIA (TRANSP) = 1.5*UFASTPP + UTHRM                 (red)
              WMHD (TRANSP) = 0.75*UFASTPP + 1.5*(UFASTPA + UPHI) + UTHRM  (dark orange)
-  bottom - plasma thermal energy:
+  2 - plasma thermal energy:
              EQ/WDIA - 1.5*UFASTPP                               (black)
              EQ/WP   - 0.75*UFASTPP - 1.5*(UFASTPA + UPHI)       (navy)
              UTHRM (TRANSP)                                      (red)
@@ -174,97 +174,96 @@ def on_grid(t_new, exp):
     return np.interp(t_new, t, y, left=np.nan, right=np.nan)
 
 
-def plot_stored_energy(pulse, runs, eq_data):
-    fig, (ax_dia, ax_th) = plt.subplots(2, 1, sharex=True, figsize=(9, 8))
-    fig.suptitle(f"JET {pulse}: stored energy", fontsize=13)
-    lw = 2.0
+LW = 2.0
 
-    # Panel 1: equilibrium WDIA / WP, once per distinct equilibrium
-    plotted_eqs = set()
-    for i, run in enumerate(runs):
-        ls = RUN_STYLES[i % len(RUN_STYLES)]
-        eq = run["eq"]
-        if eq in plotted_eqs:
-            continue
-        plotted_eqs.add(eq)
-        wdia, wp = eq_data.get((eq, "WDIA")), eq_data.get((eq, "WP"))
-        if wdia is not None:
-            ax_dia.plot(wdia[0], wdia[1] * ENERGY_SCALE, color=COLORS["eq_wdia"], ls=ls, lw=lw)
-        if wp is not None:
-            ax_dia.plot(wp[0], wp[1] * ENERGY_SCALE, color=COLORS["eq_wp"], ls=ls, lw=lw)
 
-    for i, run in enumerate(runs):
-        ls = RUN_STYLES[i % len(RUN_STYLES)]
-        t, eq = run["t"], run["eq"]
-        wdia, wp = eq_data.get((eq, "WDIA")), eq_data.get((eq, "WP"))
+def run_style(i):
+    return RUN_STYLES[i % len(RUN_STYLES)]
 
-        # Panel 1: TRANSP WDIA / WMHD
-        ax_dia.plot(t, run["wdia"] * ENERGY_SCALE, color=COLORS["tr_wdia"], ls=ls, lw=lw)
-        ax_dia.plot(t, run["wmhd"] * ENERGY_SCALE, color=COLORS["tr_wmhd"], ls=ls, lw=lw)
 
-        # Panel 2: thermal energy
-        if wdia is not None:
-            ax_th.plot(t, (on_grid(t, wdia) - run["fast_dia"]) * ENERGY_SCALE,
-                       color=COLORS["th_wdia"], ls=ls, lw=lw)
-        if wp is not None:
-            ax_th.plot(t, (on_grid(t, wp) - run["fast_mhd"]) * ENERGY_SCALE,
-                       color=COLORS["th_wp"], ls=ls, lw=lw)
-        ax_th.plot(t, run["uthrm"] * ENERGY_SCALE, color=COLORS["th_uthrm"], ls=ls, lw=lw)
-
-    # Legends: colour = quantity (per panel), line style = run (top panel)
+def eq_name_and_uphi(runs):
     ddas = {r["eq"][0] for r in runs}
     eq_name = ddas.pop() if len(ddas) == 1 else "EQ"  # per-run source is in the run legend
-    any_uphi = any(r["has_uphi"] for r in runs)
-    uphi = " + UPHI" if any_uphi else ""
+    uphi = " + UPHI" if any(r["has_uphi"] for r in runs) else ""
+    return eq_name, uphi
 
-    def colour_handles(items):
-        return [Line2D([], [], color=c, lw=lw, label=lab) for c, lab in items]
 
-    leg_q1 = ax_dia.legend(handles=colour_handles([
+def finish_figure(fig, ax, pulse, runs, title, colour_items, ymax):
+    """Axis labels, limits and two legends below the axis: quantities (colour) and runs (style)."""
+    ax.set_title(f"JET {pulse}: {title}", fontsize=14)
+    ax.set_xlabel("time [s] (TRANSP)", fontsize=13)
+    ax.set_ylabel(f"Energy [{ENERGY_UNIT}]", fontsize=13)
+    ax.set_xlim(min(r["t"][0] for r in runs), max(r["t"][-1] for r in runs))
+    # y-limit from TRANSP traces so noisy EQ data at start/end doesn't squash the plot
+    ax.set_ylim(0.0, 1.5 * ymax * ENERGY_SCALE)
+    ax.grid(alpha=0.3)
+    ax.tick_params(axis="both", labelsize=12)
+
+    colour_handles = [Line2D([], [], color=c, lw=LW, label=lab) for c, lab in colour_items]
+    run_handles = [
+        Line2D([], [], color="0.3", lw=LW, ls=run_style(i),
+               label=f"{r['label']}  [{eq_label(r['eq'])}]")
+        for i, r in enumerate(runs)
+    ]
+    for x, legend_title, handles in ((0.05, "Quantity", colour_handles),
+                                     (0.55, "TRANSP run [equilibrium]", run_handles)):
+        leg = fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(x, 0.19),
+                         fontsize="medium", title=legend_title, title_fontsize="medium",
+                         frameon=False)
+        leg.set_draggable(True)
+
+    cornernote(pulse)
+    fig.tight_layout(rect=(0, 0.2, 1, 1))  # bottom 20% for legends
+    return fig
+
+
+def plot_plasma_energy(pulse, runs, eq_data):
+    """EQ/WDIA, EQ/WP and TRANSP WDIA/WMHD; each distinct equilibrium plotted once."""
+    fig, ax = plt.subplots(figsize=(16, 9))
+
+    plotted_eqs = set()
+    for i, run in enumerate(runs):
+        ls, eq = run_style(i), run["eq"]
+        if eq not in plotted_eqs:
+            plotted_eqs.add(eq)
+            wdia, wp = eq_data.get((eq, "WDIA")), eq_data.get((eq, "WP"))
+            if wdia is not None:
+                ax.plot(wdia[0], wdia[1] * ENERGY_SCALE, color=COLORS["eq_wdia"], ls=ls, lw=LW)
+            if wp is not None:
+                ax.plot(wp[0], wp[1] * ENERGY_SCALE, color=COLORS["eq_wp"], ls=ls, lw=LW)
+        ax.plot(run["t"], run["wdia"] * ENERGY_SCALE, color=COLORS["tr_wdia"], ls=ls, lw=LW)
+        ax.plot(run["t"], run["wmhd"] * ENERGY_SCALE, color=COLORS["tr_wmhd"], ls=ls, lw=LW)
+
+    eq_name, uphi = eq_name_and_uphi(runs)
+    return finish_figure(fig, ax, pulse, runs, "plasma energy (diamagnetic / MHD)", [
         (COLORS["eq_wdia"], f"{eq_name}/WDIA"),
         (COLORS["eq_wp"], f"{eq_name}/WP"),
         (COLORS["tr_wdia"], "WDIA (TRANSP) = 1.5 UFASTPP + UTHRM"),
         (COLORS["tr_wmhd"], f"WMHD (TRANSP) = 0.75 UFASTPP + 1.5 (UFASTPA{uphi}) + UTHRM"),
-    ]), fontsize="x-small", loc="upper left")
-    leg_q1.set_draggable(True)
-    ax_dia.add_artist(leg_q1)
+    ], max(np.nanmax(r["wdia"]) for r in runs))
 
-    run_handles = [
-        Line2D([], [], color="0.3", lw=lw, ls=RUN_STYLES[i % len(RUN_STYLES)],
-               label=f"{r['label']}  [{eq_label(r['eq'])}]")
-        for i, r in enumerate(runs)
-    ]
-    leg_runs = ax_dia.legend(handles=run_handles, fontsize="x-small", loc="upper right",
-                             title="TRANSP run [equilibrium]", title_fontsize="x-small")
-    leg_runs.set_draggable(True)
 
-    leg_q2 = ax_th.legend(handles=colour_handles([
+def plot_thermal_energy(pulse, runs, eq_data):
+    """EQ/WDIA and EQ/WP minus each run's fast-ion (+ rotation) energy, and TRANSP UTHRM."""
+    fig, ax = plt.subplots(figsize=(16, 9))
+
+    for i, run in enumerate(runs):
+        ls, t, eq = run_style(i), run["t"], run["eq"]
+        wdia, wp = eq_data.get((eq, "WDIA")), eq_data.get((eq, "WP"))
+        if wdia is not None:
+            ax.plot(t, (on_grid(t, wdia) - run["fast_dia"]) * ENERGY_SCALE,
+                    color=COLORS["th_wdia"], ls=ls, lw=LW)
+        if wp is not None:
+            ax.plot(t, (on_grid(t, wp) - run["fast_mhd"]) * ENERGY_SCALE,
+                    color=COLORS["th_wp"], ls=ls, lw=LW)
+        ax.plot(t, run["uthrm"] * ENERGY_SCALE, color=COLORS["th_uthrm"], ls=ls, lw=LW)
+
+    eq_name, uphi = eq_name_and_uphi(runs)
+    return finish_figure(fig, ax, pulse, runs, "plasma thermal energy", [
         (COLORS["th_wdia"], f"WDIA ({eq_name}) - 1.5 UFASTPP (TRANSP)"),
         (COLORS["th_wp"], f"WP ({eq_name}) - 0.75 UFASTPP - 1.5 (UFASTPA{uphi}) (TRANSP)"),
         (COLORS["th_uthrm"], "UTHRM (TRANSP)"),
-    ]), fontsize="x-small", loc="upper left")
-    leg_q2.set_draggable(True)
-
-    t_min = min(r["t"][0] for r in runs)
-    t_max = max(r["t"][-1] for r in runs)
-    ax_th.set_xlim(t_min, t_max)
-
-    ax_dia.set_ylabel(f"Energy [{ENERGY_UNIT}]")
-    ax_dia.set_title("Plasma energy (diamagnetic / MHD)", fontsize=11)
-    ax_th.set_ylabel(f"Energy [{ENERGY_UNIT}]")
-    ax_th.set_title("Plasma thermal energy", fontsize=11)
-    ax_th.set_xlabel("time [s] (TRANSP)")
-    for ax in (ax_dia, ax_th):
-        ax.grid(alpha=0.3)
-        ax.tick_params(axis="both", labelsize=12)
-
-    # y-limit from TRANSP traces so noisy EQ data at start/end doesn't squash the plot
-    ax_dia.set_ylim(0.0, 1.5 * max(np.nanmax(r["wdia"]) for r in runs) * ENERGY_SCALE)
-    ax_th.set_ylim(0.0, 1.5 * max(np.nanmax(r["uthrm"]) for r in runs) * ENERGY_SCALE)
-
-    cornernote(pulse)
-    fig.tight_layout()
-    return fig
+    ], max(np.nanmax(r["uthrm"]) for r in runs))
 
 
 def parse_arguments():
@@ -306,9 +305,9 @@ def main():
                     if d is not None:
                         eq_data[(eq, dty)] = d
 
-    fig = plot_stored_energy(args.pulse, runs, eq_data)
     win = pw.plotWindow()
-    win.addPlot("stored energy", fig)
+    win.addPlot("plasma energy", plot_plasma_energy(args.pulse, runs, eq_data))
+    win.addPlot("thermal energy", plot_thermal_energy(args.pulse, runs, eq_data))
     win.show()
     return 0
 
