@@ -205,15 +205,15 @@ def finish_figure(fig, ax, pulse, runs, title, colour_items, ymax):
                label=f"{r['label']}  [{eq_label(r['eq'])}]")
         for i, r in enumerate(runs)
     ]
-    for x, legend_title, handles in ((0.05, "Quantity", colour_handles),
-                                     (0.55, "TRANSP run [equilibrium]", run_handles)):
-        leg = fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(x, 0.19),
-                         fontsize="medium", title=legend_title, title_fontsize="medium",
-                         frameon=False)
-        leg.set_draggable(True)
+    leg_q = ax.legend(handles=colour_handles, fontsize="small", loc="lower left")
+    leg_q.set_draggable(True)
+    ax.add_artist(leg_q)
+    leg_r = ax.legend(handles=run_handles, fontsize="small", loc="lower right",
+                      title="TRANSP run [equilibrium]", title_fontsize="small")
+    leg_r.set_draggable(True)
 
     cornernote(pulse)
-    fig.tight_layout(rect=(0, 0.2, 1, 1))  # bottom 20% for legends
+    fig.tight_layout()
     return fig
 
 
